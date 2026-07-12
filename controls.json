@@ -1,0 +1,20 @@
+{
+  "_comment": "VoiceBox input bindings. Keyboard entries are pygame key names (see pygame.key.key_code). Gamepad entries are button indexes: 0=A, 1=B, 3=Y on XInput pads. Delete this file to restore defaults.",
+  "keyboard": {
+    "up":         ["up", "w"],
+    "down":       ["down", "s"],
+    "left":       ["left", "a"],
+    "right":      ["right", "d"],
+    "select":     ["return", "space"],
+    "back":       ["escape"],
+    "stop_clips": ["0", "backspace"],
+    "clips":      ["1", "2", "3", "4", "5", "6", "7", "8", "9"]
+  },
+  "gamepad": {
+    "select":         [0],
+    "back":           [1],
+    "stop_clips":     [3],
+    "axis_threshold": 0.5,
+    "nav_cooldown":   0.22
+  }
+}

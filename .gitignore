@@ -1,0 +1,15 @@
+# python
+__pycache__/
+*.pyc
+
+# build output (rebuild with setup/Build-Setup.bat)
+build/
+dist/
+*.spec
+
+# personal media - soundboard clips stay local
+sounds/*
+!sounds/.gitkeep
+
+# logs / local junk
+*.log

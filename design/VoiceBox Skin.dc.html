@@ -1,0 +1,673 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<meta name="design_doc_mode" content="canvas">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
+<style>
+  body { margin:0; background:#07080A; }
+  a { color:#33D6FF; text-decoration:none; }
+  a:hover { color:#7FE6FF; }
+  @keyframes vbPulse { 0%,100% { opacity:0.4; } 50% { opacity:1; } }
+  @keyframes vbFlash { 0% { background:#2AAFD4; box-shadow:0 0 18px rgba(51,214,255,0.55); border-color:#7FE6FF; } 12% { background:#2AAFD4; box-shadow:0 0 18px rgba(51,214,255,0.55); border-color:#7FE6FF; } 40% { background:#171B22; box-shadow:0 2px 10px rgba(0,0,0,0.5); border-color:#232A34; } 100% { background:#171B22; box-shadow:0 2px 10px rgba(0,0,0,0.5); border-color:#232A34; } }
+</style>
+<script type="application/json" id="tokens">
+{
+  "canvas": { "width": 960, "height": 600, "headerH": 52, "footerH": 32, "leftPaneW": 370 },
+  "color": {
+    "bg": "#0B0D10",
+    "bgPage": "#07080A",
+    "surface": "#12151A",
+    "surfaceRaised": "#171B22",
+    "surfaceRaisedBottom": "#13161C",
+    "surfaceHover": "#1D232C",
+    "surfaceActive": "#232B36",
+    "stroke": "#232A34",
+    "strokeSoft": "#1C222B",
+    "accent": "#33D6FF",
+    "accentBright": "#7FE6FF",
+    "accentDim": "#2AAFD4",
+    "accentGlow": "rgba(51,214,255,0.28)",
+    "accentTintTop": "rgba(51,214,255,0.10)",
+    "accentTintBottom": "rgba(51,214,255,0.05)",
+    "focusRing": "#33D6FF",
+    "textOnAccent": "#04141A",
+    "danger": "#FF4D5E",
+    "dangerTint": "rgba(255,77,94,0.12)",
+    "warning": "#FFB13D",
+    "warningTint": "rgba(255,177,61,0.10)",
+    "success": "#3DDC85",
+    "textPrimary": "#E8EDF2",
+    "textSecondary": "#C7D0DA",
+    "textMuted": "#9AA7B4",
+    "textFaint": "#5C6875",
+    "barTrack": "#232A34",
+    "barFillIdle": "#46525F",
+    "meterLow": "#3DDC85",
+    "meterMid": "#FFB13D",
+    "meterHot": "#FF4D5E",
+    "meterOff": "#1A1F26",
+    "meterPeak": "#FFFFFF",
+    "scrollTrack": "#161B22",
+    "scrollThumb": "#3A4653",
+    "scrollThumbActive": "#33D6FF"
+  },
+  "shadow": {
+    "drop": "0 2px 10px rgba(0,0,0,0.5)",
+    "focusGlow": "0 0 14px rgba(51,214,255,0.28)"
+  },
+  "radius": { "row": 7, "tile": 8, "button": 7, "badge": 4, "bar": 2, "chip": 6, "arrowBtn": 5 },
+  "spacing": { "xs": 4, "s": 8, "m": 10, "l": 14, "xl": 16, "rowH": 34, "tileH": 62, "buttonH": 30, "gridGap": 8, "listGap": 2 },
+  "font": {
+    "display": "Space Grotesk",
+    "mono": "JetBrains Mono",
+    "wordmark":      { "family": "Space Grotesk", "size": 17, "weight": 700, "tracking": 1 },
+    "sectionHeader": { "family": "JetBrains Mono", "size": 10, "weight": 700, "tracking": 2 },
+    "rowLabel":      { "family": "Space Grotesk", "size": 13, "weight": 500 },
+    "rowLabelFocus": { "family": "Space Grotesk", "size": 13, "weight": 600 },
+    "rowValue":      { "family": "JetBrains Mono", "size": 12, "weight": 500 },
+    "rowValueFocus": { "family": "JetBrains Mono", "size": 12, "weight": 700 },
+    "tileName":      { "family": "Space Grotesk", "size": 13, "weight": 600 },
+    "tileDuration":  { "family": "JetBrains Mono", "size": 10, "weight": 500 },
+    "hotkeyBadge":   { "family": "JetBrains Mono", "size": 10, "weight": 700 },
+    "stripButton":   { "family": "JetBrains Mono", "size": 11, "weight": 700, "tracking": 0.5 },
+    "footer":        { "family": "JetBrains Mono", "size": 11, "weight": 500 },
+    "toast":         { "family": "JetBrains Mono", "size": 11, "weight": 500 },
+    "meterLabel":    { "family": "JetBrains Mono", "size": 10, "weight": 700, "tracking": 1.5 }
+  },
+  "motion": {
+    "easing": {
+      "easeOut": "cubic-bezier(0.2, 0, 0, 1)",
+      "easeIn": "cubic-bezier(0.4, 0, 1, 1)",
+      "linear": "linear",
+      "pygameNote": "easeOut ~= 1-(1-t)^2, easeIn ~= t^2, both close enough for port"
+    },
+    "focusMove":      { "durationMs": 120,  "easing": "easeOut", "note": "highlight rect lerps y+height between rows/tiles" },
+    "scroll":         { "durationMs": 140,  "easing": "easeOut", "note": "scrollTop lerp; thumb follows same frame" },
+    "hoverIn":        { "durationMs": 90,   "easing": "easeOut" },
+    "hoverOut":       { "durationMs": 150,  "easing": "easeOut" },
+    "pressIn":        { "durationMs": 0,    "easing": "linear", "note": "instant" },
+    "pressOut":       { "durationMs": 80,   "easing": "easeOut" },
+    "tileFlashDecay": { "durationMs": 250,  "easing": "easeIn", "note": "fires at full accent instantly, decays to idle" },
+    "valueNudge":     { "durationMs": 180,  "easing": "easeOut", "note": "value text flashes accentBright after < > adjust" },
+    "meterAttack":    { "durationMs": 40,   "easing": "linear" },
+    "meterDecay":     { "durationMs": 240,  "easing": "linear" },
+    "peakHold":       { "holdMs": 900, "fallMs": 300, "easing": "easeIn" },
+    "toastIn":        { "durationMs": 160,  "easing": "easeOut", "note": "translateY 8->0 + fade" },
+    "toastHold":      { "durationMs": 4000 },
+    "toastOut":       { "durationMs": 220,  "easing": "easeIn" },
+    "aiLoadingPulse": { "durationMs": 1200, "easing": "sine in-out", "note": "opacity 0.4 <-> 1.0, loops" }
+  }
+}
+</script>
+</helmet>
+
+<div style="min-height:100vh; background:#07080A; padding:44px 48px 80px; font-family:'Space Grotesk',sans-serif; color:#E8EDF2; display:flex; flex-direction:column; gap:56px; align-items:flex-start;">
+
+  <!-- ============ TITLE ============ -->
+  <div style="display:flex; flex-direction:column; gap:8px;">
+    <div style="display:flex; align-items:center; gap:10px;">
+      <div style="display:flex; align-items:flex-end; gap:2px; height:18px;">
+        <span style="width:3px; height:7px; background:#33D6FF; border-radius:1px;"></span>
+        <span style="width:3px; height:15px; background:#33D6FF; border-radius:1px;"></span>
+        <span style="width:3px; height:10px; background:#33D6FF; border-radius:1px;"></span>
+        <span style="width:3px; height:18px; background:#33D6FF; border-radius:1px;"></span>
+      </div>
+      <span style="font:700 24px 'Space Grotesk'; letter-spacing:1px;">VOICEBOX <span style="color:#5C6875; font-weight:500;">— UI skin spec</span></span>
+    </div>
+    <span style="font:500 12px 'JetBrains Mono'; color:#5C6875;">960 × 600 · pygame-portable: solid fills + 2-stop vertical gradients · one shadow recipe · Space Grotesk + JetBrains Mono</span>
+  </div>
+
+  <!-- ============ 01 FULL MOCKUP ============ -->
+  <section style="display:flex; flex-direction:column; gap:14px;">
+    <span style="font:700 11px 'JetBrains Mono'; letter-spacing:2px; color:#5C6875;">01 — FULL MOCKUP · 960×600 · LIVE STATE: FOCUS ON GRIT/GROWL, CLIP PLAYING, AI MODEL LOADING</span>
+
+    <div style="width:960px; height:600px; background:#0B0D10; border:1px solid #1C222B; position:relative; display:flex; flex-direction:column; overflow:hidden;" data-screen-label="Main window">
+
+      <!-- HEADER -->
+      <div style="height:52px; flex:none; background:linear-gradient(180deg,#14181F,#10141A); border-bottom:1px solid #1C222B; display:flex; align-items:center; padding:0 16px; gap:16px;">
+        <div style="display:flex; align-items:center; gap:9px;">
+          <div style="display:flex; align-items:flex-end; gap:2px; height:16px;">
+            <span style="width:3px; height:6px; background:#33D6FF; border-radius:1px;"></span>
+            <span style="width:3px; height:13px; background:#33D6FF; border-radius:1px;"></span>
+            <span style="width:3px; height:9px; background:#33D6FF; border-radius:1px;"></span>
+            <span style="width:3px; height:16px; background:#33D6FF; border-radius:1px;"></span>
+          </div>
+          <span style="font:700 17px 'Space Grotesk'; letter-spacing:1px; color:#E8EDF2;">VOICE<span style="color:#33D6FF;">BOX</span></span>
+        </div>
+        <span style="flex:1;"></span>
+        <div style="display:flex; align-items:center; gap:10px;">
+          <span style="font:700 10px 'JetBrains Mono'; letter-spacing:1.5px; color:#5C6875;">MIC</span>
+          <div style="display:flex; align-items:center; gap:2px;">
+            <span style="width:5px; height:13px; background:#3DDC85; border-radius:1px;"></span><span style="width:5px; height:13px; background:#3DDC85; border-radius:1px;"></span><span style="width:5px; height:13px; background:#3DDC85; border-radius:1px;"></span><span style="width:5px; height:13px; background:#3DDC85; border-radius:1px;"></span><span style="width:5px; height:13px; background:#3DDC85; border-radius:1px;"></span><span style="width:5px; height:13px; background:#3DDC85; border-radius:1px;"></span><span style="width:5px; height:13px; background:#3DDC85; border-radius:1px;"></span><span style="width:5px; height:13px; background:#3DDC85; border-radius:1px;"></span><span style="width:5px; height:13px; background:#3DDC85; border-radius:1px;"></span><span style="width:5px; height:13px; background:#3DDC85; border-radius:1px;"></span><span style="width:5px; height:13px; background:#3DDC85; border-radius:1px;"></span><span style="width:5px; height:13px; background:#3DDC85; border-radius:1px;"></span><span style="width:5px; height:13px; background:#3DDC85; border-radius:1px;"></span><span style="width:5px; height:13px; background:#1A1F26; border-radius:1px;"></span><span style="width:5px; height:13px; background:#1A1F26; border-radius:1px;"></span><span style="width:5px; height:13px; background:#1A1F26; border-radius:1px;"></span><span style="width:5px; height:13px; background:#FFB13D; border-radius:1px;"></span><span style="width:5px; height:13px; background:#1A1F26; border-radius:1px;"></span><span style="width:5px; height:13px; background:#1A1F26; border-radius:1px;"></span><span style="width:5px; height:13px; background:#1A1F26; border-radius:1px;"></span><span style="width:5px; height:13px; background:#1A1F26; border-radius:1px;"></span><span style="width:5px; height:13px; background:#1A1F26; border-radius:1px;"></span>
+          </div>
+          <span style="font:500 10px 'JetBrains Mono'; color:#9AA7B4; width:52px; text-align:right;">-11.4 dB</span>
+        </div>
+      </div>
+
+      <!-- BODY -->
+      <div style="flex:1; display:flex; min-height:0;">
+
+        <!-- LEFT: settings list -->
+        <div style="width:370px; flex:none; border-right:1px solid #1C222B; position:relative; background:#0D1014;">
+          <div onScroll="{{ onLeftScroll }}" ref="{{ leftRef }}" style="position:absolute; inset:0; overflow-y:auto; scrollbar-width:none; padding:6px 14px 24px 10px; display:flex; flex-direction:column; gap:2px;">
+
+            <div style="display:flex; align-items:center; gap:8px; margin:8px 4px 4px;"><span style="font:700 10px 'JetBrains Mono'; letter-spacing:2px; color:#5C6875;">VOICE</span><span style="flex:1; height:1px; background:#1C222B;"></span></div>
+
+            <div style="display:flex; align-items:center; height:34px; padding:0 10px 0 12px; border-radius:7px; border:1px solid transparent;">
+              <span style="font:500 13px 'Space Grotesk'; color:#C7D0DA;">Preset</span><span style="flex:1;"></span>
+              <span style="font:500 12px 'JetBrains Mono'; color:#E8EDF2;">Space Marine</span>
+            </div>
+            <div style="display:flex; align-items:center; height:34px; padding:0 10px 0 12px; border-radius:7px; border:1px solid transparent;">
+              <span style="font:500 13px 'Space Grotesk'; color:#C7D0DA;">Pitch</span><span style="flex:1;"></span>
+              <span style="font:500 12px 'JetBrains Mono'; color:#E8EDF2;">-5 st</span>
+            </div>
+
+            <div style="display:flex; align-items:center; gap:8px; margin:14px 4px 4px;"><span style="font:700 10px 'JetBrains Mono'; letter-spacing:2px; color:#5C6875;">EFFECTS</span><span style="flex:1; height:1px; background:#1C222B;"></span></div>
+
+            <div style="display:flex; align-items:center; height:34px; padding:0 10px 0 12px; border-radius:7px; border:1px solid transparent;">
+              <span style="font:500 13px 'Space Grotesk'; color:#C7D0DA;">Robot voice</span><span style="flex:1;"></span>
+              <span style="font:500 12px 'JetBrains Mono'; color:#5C6875;">off</span>
+            </div>
+            <div style="display:flex; align-items:center; gap:7px; height:34px; padding:0 10px 0 12px; border-radius:7px; border:1px solid transparent;">
+              <span style="font:500 13px 'Space Grotesk'; color:#C7D0DA;">Helmet doubler</span><span style="flex:1;"></span>
+              <span style="width:5px; height:5px; border-radius:50%; background:#33D6FF;"></span>
+              <span style="font:700 12px 'JetBrains Mono'; color:#33D6FF;">ON</span>
+            </div>
+
+            <!-- FOCUSED ROW -->
+            <div style="display:flex; align-items:center; gap:8px; height:34px; padding:0 5px 0 12px; border-radius:7px; background:linear-gradient(180deg,rgba(51,214,255,0.10),rgba(51,214,255,0.05)); border:1px solid #33D6FF; box-shadow:0 0 14px rgba(51,214,255,0.28);">
+              <span style="font:600 13px 'Space Grotesk'; color:#E8EDF2;">Grit/growl</span><span style="flex:1;"></span>
+              <span style="width:20px; height:22px; display:flex; align-items:center; justify-content:center; border:1px solid rgba(51,214,255,0.35); border-radius:5px; color:#33D6FF; font:700 13px 'JetBrains Mono';">‹</span>
+              <span style="width:56px; height:4px; border-radius:2px; background:#232A34; position:relative;"><span style="position:absolute; left:0; top:0; bottom:0; width:85%; border-radius:2px; background:#33D6FF;"></span></span>
+              <span style="font:700 12px 'JetBrains Mono'; color:#33D6FF; width:34px; text-align:right;">85%</span>
+              <span style="width:20px; height:22px; display:flex; align-items:center; justify-content:center; border:1px solid rgba(51,214,255,0.35); border-radius:5px; color:#33D6FF; font:700 13px 'JetBrains Mono';">›</span>
+            </div>
+
+            <div style="display:flex; align-items:center; gap:8px; height:34px; padding:0 10px 0 12px; border-radius:7px; border:1px solid transparent;">
+              <span style="font:500 13px 'Space Grotesk'; color:#C7D0DA;">Reverb</span><span style="flex:1;"></span>
+              <span style="width:56px; height:4px; border-radius:2px; background:#232A34; position:relative;"><span style="position:absolute; left:0; top:0; bottom:0; width:40%; border-radius:2px; background:#46525F;"></span></span>
+              <span style="font:500 12px 'JetBrains Mono'; color:#E8EDF2; width:34px; text-align:right;">40%</span>
+            </div>
+            <div style="display:flex; align-items:center; height:34px; padding:0 10px 0 12px; border-radius:7px; border:1px solid transparent;">
+              <span style="font:500 13px 'Space Grotesk'; color:#C7D0DA;">Echo</span><span style="flex:1;"></span>
+              <span style="font:500 12px 'JetBrains Mono'; color:#5C6875;">off</span>
+            </div>
+            <div style="display:flex; align-items:center; height:34px; padding:0 10px 0 12px; border-radius:7px; border:1px solid transparent;">
+              <span style="font:500 13px 'Space Grotesk'; color:#C7D0DA;">Radio voice</span><span style="flex:1;"></span>
+              <span style="font:500 12px 'JetBrains Mono'; color:#5C6875;">off</span>
+            </div>
+            <div style="display:flex; align-items:center; gap:8px; height:34px; padding:0 10px 0 12px; border-radius:7px; border:1px solid transparent;">
+              <span style="font:500 13px 'Space Grotesk'; color:#C7D0DA;">Bass boost</span><span style="flex:1;"></span>
+              <span style="width:56px; height:4px; border-radius:2px; background:#232A34; position:relative;"><span style="position:absolute; left:0; top:0; bottom:0; width:60%; border-radius:2px; background:#46525F;"></span></span>
+              <span style="font:500 12px 'JetBrains Mono'; color:#E8EDF2; width:34px; text-align:right;">60%</span>
+            </div>
+            <div style="display:flex; align-items:center; gap:8px; height:34px; padding:0 10px 0 12px; border-radius:7px; border:1px solid transparent;">
+              <span style="font:500 13px 'Space Grotesk'; color:#C7D0DA;">Voice volume</span><span style="flex:1;"></span>
+              <span style="width:56px; height:4px; border-radius:2px; background:#232A34; position:relative;"><span style="position:absolute; left:0; top:0; bottom:0; width:100%; border-radius:2px; background:#46525F;"></span></span>
+              <span style="font:500 12px 'JetBrains Mono'; color:#E8EDF2; width:34px; text-align:right;">100%</span>
+            </div>
+            <div style="display:flex; align-items:center; gap:8px; height:34px; padding:0 10px 0 12px; border-radius:7px; border:1px solid transparent;">
+              <span style="font:500 13px 'Space Grotesk'; color:#C7D0DA;">Clip volume</span><span style="flex:1;"></span>
+              <span style="width:56px; height:4px; border-radius:2px; background:#232A34; position:relative;"><span style="position:absolute; left:0; top:0; bottom:0; width:80%; border-radius:2px; background:#46525F;"></span></span>
+              <span style="font:500 12px 'JetBrains Mono'; color:#E8EDF2; width:34px; text-align:right;">80%</span>
+            </div>
+
+            <div style="display:flex; align-items:center; gap:8px; margin:14px 4px 4px;"><span style="font:700 10px 'JetBrains Mono'; letter-spacing:2px; color:#5C6875;">AI</span><span style="flex:1; height:1px; background:#1C222B;"></span></div>
+
+            <div style="display:flex; align-items:center; gap:7px; height:34px; padding:0 10px 0 12px; border-radius:7px; border:1px solid transparent;">
+              <span style="font:500 13px 'Space Grotesk'; color:#C7D0DA;">AI voice</span><span style="flex:1;"></span>
+              <span style="width:5px; height:5px; border-radius:50%; background:#33D6FF;"></span>
+              <span style="font:700 12px 'JetBrains Mono'; color:#33D6FF;">ON</span>
+            </div>
+            <sc-if value="{{ aiLoading }}" hint-placeholder-val="{{ true }}">
+              <div style="display:flex; align-items:center; gap:7px; height:34px; padding:0 10px 0 12px; border-radius:7px; border:1px solid transparent;">
+                <span style="font:500 13px 'Space Grotesk'; color:#C7D0DA;">AI character</span><span style="flex:1;"></span>
+                <span style="display:flex; align-items:center; gap:7px; animation:vbPulse 1.2s ease-in-out infinite;">
+                  <span style="width:5px; height:5px; border-radius:50%; background:#33D6FF;"></span>
+                  <span style="font:500 12px 'JetBrains Mono'; color:#9AA7B4;">loading…</span>
+                </span>
+              </div>
+            </sc-if>
+            <sc-if value="{{ aiReady }}" hint-placeholder-val="{{ false }}">
+              <div style="display:flex; align-items:center; height:34px; padding:0 10px 0 12px; border-radius:7px; border:1px solid transparent;">
+                <span style="font:500 13px 'Space Grotesk'; color:#C7D0DA;">AI character</span><span style="flex:1;"></span>
+                <span style="font:500 12px 'JetBrains Mono'; color:#E8EDF2;">GLaDOS</span>
+              </div>
+            </sc-if>
+            <sc-if value="{{ aiError }}" hint-placeholder-val="{{ false }}">
+              <div style="display:flex; align-items:center; gap:7px; height:34px; padding:0 10px 0 12px; border-radius:7px; border:1px solid rgba(255,77,94,0.35); background:linear-gradient(180deg,rgba(255,77,94,0.08),rgba(255,77,94,0.04));">
+                <span style="font:500 13px 'Space Grotesk'; color:#C7D0DA;">AI character</span><span style="flex:1;"></span>
+                <span style="width:5px; height:5px; border-radius:50%; background:#FF4D5E;"></span>
+                <span style="font:700 12px 'JetBrains Mono'; color:#FF4D5E;">error</span>
+              </div>
+            </sc-if>
+
+            <div style="display:flex; align-items:center; gap:8px; margin:14px 4px 4px;"><span style="font:700 10px 'JetBrains Mono'; letter-spacing:2px; color:#5C6875;">SOUNDS</span><span style="flex:1; height:1px; background:#1C222B;"></span></div>
+
+            <div style="display:flex; align-items:center; gap:7px; height:34px; padding:0 10px 0 12px; border-radius:7px; border:1px solid transparent;">
+              <span style="font:500 13px 'Space Grotesk'; color:#C7D0DA;">Sounds to mic</span><span style="flex:1;"></span>
+              <span style="width:5px; height:5px; border-radius:50%; background:#33D6FF;"></span>
+              <span style="font:700 12px 'JetBrains Mono'; color:#33D6FF;">ON</span>
+            </div>
+            <div style="display:flex; align-items:center; height:34px; padding:0 10px 0 12px; border-radius:7px; border:1px solid transparent;">
+              <span style="font:500 13px 'Space Grotesk'; color:#C7D0DA;">Pause sounds</span><span style="flex:1;"></span>
+              <span style="font:500 12px 'JetBrains Mono'; color:#5C6875;">off</span>
+            </div>
+            <div style="display:flex; align-items:center; height:34px; padding:0 10px 0 12px; border-radius:7px; border:1px solid transparent;">
+              <span style="font:500 13px 'Space Grotesk'; color:#C7D0DA;">Stop all sounds</span><span style="flex:1;"></span>
+              <span style="font:500 12px 'JetBrains Mono'; color:#5C6875;">↵</span>
+            </div>
+
+            <div style="display:flex; align-items:center; gap:8px; margin:14px 4px 4px;"><span style="font:700 10px 'JetBrains Mono'; letter-spacing:2px; color:#5C6875;">SYSTEM</span><span style="flex:1; height:1px; background:#1C222B;"></span></div>
+
+            <div style="display:flex; align-items:center; height:34px; padding:0 10px 0 12px; border-radius:7px; border:1px solid transparent;">
+              <span style="font:500 13px 'Space Grotesk'; color:#C7D0DA;">Test — hear myself</span><span style="flex:1;"></span>
+              <span style="font:500 12px 'JetBrains Mono'; color:#5C6875;">off</span>
+            </div>
+            <div style="display:flex; align-items:center; height:34px; padding:0 10px 0 12px; border-radius:7px; border:1px solid transparent;">
+              <span style="font:500 13px 'Space Grotesk'; color:#C7D0DA;">Quit</span><span style="flex:1;"></span>
+              <span style="font:500 12px 'JetBrains Mono'; color:#5C6875;">↵</span>
+            </div>
+          </div>
+          <!-- scroll affordances -->
+          <div style="position:absolute; left:0; right:6px; bottom:0; height:26px; background:linear-gradient(180deg,rgba(13,16,20,0),rgba(13,16,20,1)); pointer-events:none;"></div>
+          <div style="position:absolute; right:2px; top:4px; bottom:4px; width:3px; border-radius:2px; background:#161B22;"></div>
+          <div style="position:absolute; right:2px; width:3px; border-radius:2px; background:#3A4653; top:{{ leftThumbTop }}px; height:{{ leftThumbH }}px;"></div>
+        </div>
+
+        <!-- RIGHT: soundboard -->
+        <div style="flex:1; display:flex; flex-direction:column; min-width:0; padding:10px 14px 0;">
+          <div style="flex:none; display:flex; align-items:center; gap:8px; padding-bottom:10px;">
+            <div style="height:30px; padding:0 12px; display:flex; align-items:center; gap:7px; border-radius:7px; background:linear-gradient(180deg,rgba(51,214,255,0.10),rgba(51,214,255,0.05)); border:1px solid rgba(51,214,255,0.45); font:700 11px 'JetBrains Mono'; letter-spacing:0.5px; color:#33D6FF;">
+              <span style="width:5px; height:5px; border-radius:50%; background:#33D6FF;"></span>TO MIC: ON
+            </div>
+            <div style="height:30px; padding:0 12px; display:flex; align-items:center; border-radius:7px; background:linear-gradient(180deg,#171B22,#13161C); border:1px solid #232A34; font:700 11px 'JetBrains Mono'; letter-spacing:0.5px; color:#9AA7B4;">PAUSE</div>
+            <div style="height:30px; padding:0 12px; display:flex; align-items:center; border-radius:7px; background:linear-gradient(180deg,#171B22,#13161C); border:1px solid #232A34; font:700 11px 'JetBrains Mono'; letter-spacing:0.5px; color:#9AA7B4;">STOP</div>
+            <span style="flex:1;"></span>
+            <span style="font:500 10px 'JetBrains Mono'; color:#5C6875;">21 SOUNDS</span>
+          </div>
+
+          <div style="flex:1; position:relative; min-height:0;">
+            <div onScroll="{{ onGridScroll }}" ref="{{ gridRef }}" style="position:absolute; inset:0; overflow-y:auto; scrollbar-width:none; padding-right:8px; padding-bottom:14px; display:grid; grid-template-columns:repeat(3,1fr); gap:8px; align-content:start;">
+
+              <div style="height:62px; background:linear-gradient(180deg,#171B22,#13161C); border:1px solid #232A34; border-radius:8px; padding:9px 10px; display:flex; flex-direction:column; justify-content:space-between; box-shadow:0 2px 10px rgba(0,0,0,0.5);">
+                <div style="display:flex; align-items:flex-start; justify-content:space-between; gap:6px;"><span style="font:600 13px 'Space Grotesk'; color:#E8EDF2;">airhorn</span><span style="min-width:16px; height:16px; padding:0 3px; border:1px solid #2C3542; border-radius:4px; color:#9AA7B4; font:700 10px 'JetBrains Mono'; display:flex; align-items:center; justify-content:center;">1</span></div>
+                <span style="font:500 10px 'JetBrains Mono'; color:#5C6875;">1.8s</span>
+              </div>
+              <div style="height:62px; background:linear-gradient(180deg,#171B22,#13161C); border:1px solid #232A34; border-radius:8px; padding:9px 10px; display:flex; flex-direction:column; justify-content:space-between; box-shadow:0 2px 10px rgba(0,0,0,0.5);">
+                <div style="display:flex; align-items:flex-start; justify-content:space-between; gap:6px;"><span style="font:600 13px 'Space Grotesk'; color:#E8EDF2;">bruh</span><span style="min-width:16px; height:16px; padding:0 3px; border:1px solid #2C3542; border-radius:4px; color:#9AA7B4; font:700 10px 'JetBrains Mono'; display:flex; align-items:center; justify-content:center;">2</span></div>
+                <span style="font:500 10px 'JetBrains Mono'; color:#5C6875;">0.9s</span>
+              </div>
+              <div style="height:62px; background:linear-gradient(180deg,#171B22,#13161C); border:1px solid #232A34; border-radius:8px; padding:9px 10px; display:flex; flex-direction:column; justify-content:space-between; box-shadow:0 2px 10px rgba(0,0,0,0.5);">
+                <div style="display:flex; align-items:flex-start; justify-content:space-between; gap:6px;"><span style="font:600 13px 'Space Grotesk'; color:#E8EDF2;">victory</span><span style="min-width:16px; height:16px; padding:0 3px; border:1px solid #2C3542; border-radius:4px; color:#9AA7B4; font:700 10px 'JetBrains Mono'; display:flex; align-items:center; justify-content:center;">3</span></div>
+                <span style="font:500 10px 'JetBrains Mono'; color:#5C6875;">3.2s</span>
+              </div>
+              <div style="height:62px; background:linear-gradient(180deg,#171B22,#13161C); border:1px solid #232A34; border-radius:8px; padding:9px 10px; display:flex; flex-direction:column; justify-content:space-between; box-shadow:0 2px 10px rgba(0,0,0,0.5);">
+                <div style="display:flex; align-items:flex-start; justify-content:space-between; gap:6px;"><span style="font:600 13px 'Space Grotesk'; color:#E8EDF2;">oof</span><span style="min-width:16px; height:16px; padding:0 3px; border:1px solid #2C3542; border-radius:4px; color:#9AA7B4; font:700 10px 'JetBrains Mono'; display:flex; align-items:center; justify-content:center;">4</span></div>
+                <span style="font:500 10px 'JetBrains Mono'; color:#5C6875;">0.4s</span>
+              </div>
+              <!-- playing tile -->
+              <div style="height:62px; background:linear-gradient(180deg,#171B22,#13161C); border:1px solid rgba(51,214,255,0.45); border-radius:8px; padding:9px 10px; display:flex; flex-direction:column; justify-content:space-between; box-shadow:0 2px 10px rgba(0,0,0,0.5); position:relative; overflow:hidden;">
+                <div style="display:flex; align-items:flex-start; justify-content:space-between; gap:6px;"><span style="font:600 13px 'Space Grotesk'; color:#E8EDF2;">you died</span><span style="min-width:16px; height:16px; padding:0 3px; border:1px solid rgba(51,214,255,0.45); border-radius:4px; color:#33D6FF; font:700 10px 'JetBrains Mono'; display:flex; align-items:center; justify-content:center;">5</span></div>
+                <span style="font:500 10px 'JetBrains Mono'; color:#33D6FF;">▶ 4.5s</span>
+                <span style="position:absolute; left:0; bottom:0; height:2px; width:38%; background:#33D6FF;"></span>
+              </div>
+              <div style="height:62px; background:linear-gradient(180deg,#171B22,#13161C); border:1px solid #232A34; border-radius:8px; padding:9px 10px; display:flex; flex-direction:column; justify-content:space-between; box-shadow:0 2px 10px rgba(0,0,0,0.5);">
+                <div style="display:flex; align-items:flex-start; justify-content:space-between; gap:6px;"><span style="font:600 13px 'Space Grotesk'; color:#E8EDF2;">sad trombone</span><span style="min-width:16px; height:16px; padding:0 3px; border:1px solid #2C3542; border-radius:4px; color:#9AA7B4; font:700 10px 'JetBrains Mono'; display:flex; align-items:center; justify-content:center;">6</span></div>
+                <span style="font:500 10px 'JetBrains Mono'; color:#5C6875;">2.6s</span>
+              </div>
+              <div style="height:62px; background:linear-gradient(180deg,#171B22,#13161C); border:1px solid #232A34; border-radius:8px; padding:9px 10px; display:flex; flex-direction:column; justify-content:space-between; box-shadow:0 2px 10px rgba(0,0,0,0.5);">
+                <div style="display:flex; align-items:flex-start; justify-content:space-between; gap:6px;"><span style="font:600 13px 'Space Grotesk'; color:#E8EDF2;">nuke</span><span style="min-width:16px; height:16px; padding:0 3px; border:1px solid #2C3542; border-radius:4px; color:#9AA7B4; font:700 10px 'JetBrains Mono'; display:flex; align-items:center; justify-content:center;">7</span></div>
+                <span style="font:500 10px 'JetBrains Mono'; color:#5C6875;">6.1s</span>
+              </div>
+              <div style="height:62px; background:linear-gradient(180deg,#171B22,#13161C); border:1px solid #232A34; border-radius:8px; padding:9px 10px; display:flex; flex-direction:column; justify-content:space-between; box-shadow:0 2px 10px rgba(0,0,0,0.5);">
+                <div style="display:flex; align-items:flex-start; justify-content:space-between; gap:6px;"><span style="font:600 13px 'Space Grotesk'; color:#E8EDF2;">mario jump</span><span style="min-width:16px; height:16px; padding:0 3px; border:1px solid #2C3542; border-radius:4px; color:#9AA7B4; font:700 10px 'JetBrains Mono'; display:flex; align-items:center; justify-content:center;">8</span></div>
+                <span style="font:500 10px 'JetBrains Mono'; color:#5C6875;">0.5s</span>
+              </div>
+              <div style="height:62px; background:linear-gradient(180deg,#171B22,#13161C); border:1px solid #232A34; border-radius:8px; padding:9px 10px; display:flex; flex-direction:column; justify-content:space-between; box-shadow:0 2px 10px rgba(0,0,0,0.5);">
+                <div style="display:flex; align-items:flex-start; justify-content:space-between; gap:6px;"><span style="font:600 13px 'Space Grotesk'; color:#E8EDF2;">mgs alert</span><span style="min-width:16px; height:16px; padding:0 3px; border:1px solid #2C3542; border-radius:4px; color:#9AA7B4; font:700 10px 'JetBrains Mono'; display:flex; align-items:center; justify-content:center;">9</span></div>
+                <span style="font:500 10px 'JetBrains Mono'; color:#5C6875;">1.2s</span>
+              </div>
+              <div style="height:62px; background:linear-gradient(180deg,#171B22,#13161C); border:1px solid #232A34; border-radius:8px; padding:9px 10px; display:flex; flex-direction:column; justify-content:space-between; box-shadow:0 2px 10px rgba(0,0,0,0.5);">
+                <div style="display:flex; align-items:flex-start; justify-content:space-between; gap:6px;"><span style="font:600 13px 'Space Grotesk'; color:#E8EDF2;">crickets</span></div>
+                <span style="font:500 10px 'JetBrains Mono'; color:#5C6875;">5.8s</span>
+              </div>
+              <div style="height:62px; background:linear-gradient(180deg,#171B22,#13161C); border:1px solid #232A34; border-radius:8px; padding:9px 10px; display:flex; flex-direction:column; justify-content:space-between; box-shadow:0 2px 10px rgba(0,0,0,0.5);">
+                <div style="display:flex; align-items:flex-start; justify-content:space-between; gap:6px;"><span style="font:600 13px 'Space Grotesk'; color:#E8EDF2;">law &amp; order</span></div>
+                <span style="font:500 10px 'JetBrains Mono'; color:#5C6875;">2.1s</span>
+              </div>
+              <div style="height:62px; background:linear-gradient(180deg,#171B22,#13161C); border:1px solid #232A34; border-radius:8px; padding:9px 10px; display:flex; flex-direction:column; justify-content:space-between; box-shadow:0 2px 10px rgba(0,0,0,0.5);">
+                <div style="display:flex; align-items:flex-start; justify-content:space-between; gap:6px;"><span style="font:600 13px 'Space Grotesk'; color:#E8EDF2;">violin screech</span></div>
+                <span style="font:500 10px 'JetBrains Mono'; color:#5C6875;">1.6s</span>
+              </div>
+              <div style="height:62px; background:linear-gradient(180deg,#171B22,#13161C); border:1px solid #232A34; border-radius:8px; padding:9px 10px; display:flex; flex-direction:column; justify-content:space-between; box-shadow:0 2px 10px rgba(0,0,0,0.5);">
+                <div style="display:flex; align-items:flex-start; justify-content:space-between; gap:6px;"><span style="font:600 13px 'Space Grotesk'; color:#E8EDF2;">smack</span></div>
+                <span style="font:500 10px 'JetBrains Mono'; color:#5C6875;">0.6s</span>
+              </div>
+              <div style="height:62px; background:linear-gradient(180deg,#171B22,#13161C); border:1px solid #232A34; border-radius:8px; padding:9px 10px; display:flex; flex-direction:column; justify-content:space-between; box-shadow:0 2px 10px rgba(0,0,0,0.5);">
+                <div style="display:flex; align-items:flex-start; justify-content:space-between; gap:6px;"><span style="font:600 13px 'Space Grotesk'; color:#E8EDF2;">big laugh</span></div>
+                <span style="font:500 10px 'JetBrains Mono'; color:#5C6875;">7.4s</span>
+              </div>
+              <div style="height:62px; background:linear-gradient(180deg,#171B22,#13161C); border:1px solid #232A34; border-radius:8px; padding:9px 10px; display:flex; flex-direction:column; justify-content:space-between; box-shadow:0 2px 10px rgba(0,0,0,0.5);">
+                <div style="display:flex; align-items:flex-start; justify-content:space-between; gap:6px;"><span style="font:600 13px 'Space Grotesk'; color:#E8EDF2;">1v1 me</span></div>
+                <span style="font:500 10px 'JetBrains Mono'; color:#5C6875;">1.9s</span>
+              </div>
+              <div style="height:62px; background:linear-gradient(180deg,#171B22,#13161C); border:1px solid #232A34; border-radius:8px; padding:9px 10px; display:flex; flex-direction:column; justify-content:space-between; box-shadow:0 2px 10px rgba(0,0,0,0.5);">
+                <div style="display:flex; align-items:flex-start; justify-content:space-between; gap:6px;"><span style="font:600 13px 'Space Grotesk'; color:#E8EDF2;">chest open</span></div>
+                <span style="font:500 10px 'JetBrains Mono'; color:#5C6875;">4.0s</span>
+              </div>
+              <div style="height:62px; background:linear-gradient(180deg,#171B22,#13161C); border:1px solid #232A34; border-radius:8px; padding:9px 10px; display:flex; flex-direction:column; justify-content:space-between; box-shadow:0 2px 10px rgba(0,0,0,0.5);">
+                <div style="display:flex; align-items:flex-start; justify-content:space-between; gap:6px;"><span style="font:600 13px 'Space Grotesk'; color:#E8EDF2;">heavenly</span></div>
+                <span style="font:500 10px 'JetBrains Mono'; color:#5C6875;">5.2s</span>
+              </div>
+              <div style="height:62px; background:linear-gradient(180deg,#171B22,#13161C); border:1px solid #232A34; border-radius:8px; padding:9px 10px; display:flex; flex-direction:column; justify-content:space-between; box-shadow:0 2px 10px rgba(0,0,0,0.5);">
+                <div style="display:flex; align-items:flex-start; justify-content:space-between; gap:6px;"><span style="font:600 13px 'Space Grotesk'; color:#E8EDF2;">squeaky toy</span></div>
+                <span style="font:500 10px 'JetBrains Mono'; color:#5C6875;">0.7s</span>
+              </div>
+              <div style="height:62px; background:linear-gradient(180deg,#171B22,#13161C); border:1px solid #232A34; border-radius:8px; padding:9px 10px; display:flex; flex-direction:column; justify-content:space-between; box-shadow:0 2px 10px rgba(0,0,0,0.5);">
+                <div style="display:flex; align-items:flex-start; justify-content:space-between; gap:6px;"><span style="font:600 13px 'Space Grotesk'; color:#E8EDF2;">losing horn</span></div>
+                <span style="font:500 10px 'JetBrains Mono'; color:#5C6875;">3.4s</span>
+              </div>
+              <div style="height:62px; background:linear-gradient(180deg,#171B22,#13161C); border:1px solid #232A34; border-radius:8px; padding:9px 10px; display:flex; flex-direction:column; justify-content:space-between; box-shadow:0 2px 10px rgba(0,0,0,0.5);">
+                <div style="display:flex; align-items:flex-start; justify-content:space-between; gap:6px;"><span style="font:600 13px 'Space Grotesk'; color:#E8EDF2;">scream</span></div>
+                <span style="font:500 10px 'JetBrains Mono'; color:#5C6875;">2.8s</span>
+              </div>
+              <div style="height:62px; background:linear-gradient(180deg,#171B22,#13161C); border:1px solid #232A34; border-radius:8px; padding:9px 10px; display:flex; flex-direction:column; justify-content:space-between; box-shadow:0 2px 10px rgba(0,0,0,0.5);">
+                <div style="display:flex; align-items:flex-start; justify-content:space-between; gap:6px;"><span style="font:600 13px 'Space Grotesk'; color:#E8EDF2;">sad violin</span></div>
+                <span style="font:500 10px 'JetBrains Mono'; color:#5C6875;">8.9s</span>
+              </div>
+            </div>
+            <div style="position:absolute; left:0; right:8px; bottom:0; height:26px; background:linear-gradient(180deg,rgba(11,13,16,0),rgba(11,13,16,1)); pointer-events:none;"></div>
+            <div style="position:absolute; right:0; top:4px; bottom:4px; width:3px; border-radius:2px; background:#161B22;"></div>
+            <div style="position:absolute; right:0; width:3px; border-radius:2px; background:#3A4653; top:{{ gridThumbTop }}px; height:{{ gridThumbH }}px;"></div>
+          </div>
+        </div>
+      </div>
+
+      <!-- FOOTER -->
+      <div style="height:32px; flex:none; background:linear-gradient(180deg,#10141A,#0D1015); border-top:1px solid #1C222B; display:flex; align-items:center; padding:0 14px; gap:12px;">
+        <span style="font:500 11px 'JetBrains Mono'; color:#9AA7B4;">Mic <span style="color:#33D6FF;">→</span> CABLE Input <span style="color:#5C6875;">(VB-Audio)</span></span>
+        <span style="flex:1;"></span>
+        <div style="height:20px; display:flex; align-items:center; gap:7px; padding:0 9px; border-radius:6px; background:rgba(255,177,61,0.10); border:1px solid rgba(255,177,61,0.4);">
+          <span style="width:5px; height:5px; border-radius:50%; background:#FFB13D;"></span>
+          <span style="font:500 11px 'JetBrains Mono'; color:#FFB13D;">audio: output underflow (×3)</span>
+        </div>
+      </div>
+
+      <sc-if value="{{ pixelGrid }}" hint-placeholder-val="{{ false }}">
+        <div style="position:absolute; inset:0; pointer-events:none; background-image:repeating-linear-gradient(0deg,rgba(51,214,255,0.07) 0 1px,transparent 1px 8px),repeating-linear-gradient(90deg,rgba(51,214,255,0.07) 0 1px,transparent 1px 8px);"></div>
+      </sc-if>
+    </div>
+  </section>
+
+  <!-- ============ 02 STATES ============ -->
+  <section style="display:flex; flex-direction:column; gap:22px; max-width:1200px;">
+    <span style="font:700 11px 'JetBrains Mono'; letter-spacing:2px; color:#5C6875;">02 — COMPONENT STATES</span>
+
+    <!-- Settings rows -->
+    <div style="display:flex; flex-direction:column; gap:8px;">
+      <span style="font:600 13px 'Space Grotesk'; color:#9AA7B4;">Settings row · 34px tall · radius 7</span>
+      <div style="display:grid; grid-template-columns:repeat(4, 300px); gap:14px 18px; background:#0D1014; border:1px solid #1C222B; border-radius:10px; padding:18px;">
+        <div style="display:flex; flex-direction:column; gap:6px;">
+          <div style="display:flex; align-items:center; height:34px; padding:0 10px 0 12px; border-radius:7px; border:1px solid transparent;">
+            <span style="font:500 13px 'Space Grotesk'; color:#C7D0DA;">Reverb</span><span style="flex:1;"></span>
+            <span style="font:500 12px 'JetBrains Mono'; color:#E8EDF2;">40%</span>
+          </div>
+          <span style="font:500 10px 'JetBrains Mono'; color:#5C6875;">idle</span>
+        </div>
+        <div style="display:flex; flex-direction:column; gap:6px;">
+          <div style="display:flex; align-items:center; height:34px; padding:0 10px 0 12px; border-radius:7px; background:#1D232C; border:1px solid #2C3542;">
+            <span style="font:500 13px 'Space Grotesk'; color:#E8EDF2;">Reverb</span><span style="flex:1;"></span>
+            <span style="font:500 12px 'JetBrains Mono'; color:#E8EDF2;">40%</span>
+          </div>
+          <span style="font:500 10px 'JetBrains Mono'; color:#5C6875;">hover · in 90ms / out 150ms</span>
+        </div>
+        <div style="display:flex; flex-direction:column; gap:6px;">
+          <div style="display:flex; align-items:center; gap:8px; height:34px; padding:0 5px 0 12px; border-radius:7px; background:linear-gradient(180deg,rgba(51,214,255,0.10),rgba(51,214,255,0.05)); border:1px solid #33D6FF; box-shadow:0 0 14px rgba(51,214,255,0.28);">
+            <span style="font:600 13px 'Space Grotesk'; color:#E8EDF2;">Reverb</span><span style="flex:1;"></span>
+            <span style="width:20px; height:22px; display:flex; align-items:center; justify-content:center; border:1px solid rgba(51,214,255,0.35); border-radius:5px; color:#33D6FF; font:700 13px 'JetBrains Mono';">‹</span>
+            <span style="font:700 12px 'JetBrains Mono'; color:#33D6FF;">40%</span>
+            <span style="width:20px; height:22px; display:flex; align-items:center; justify-content:center; border:1px solid rgba(51,214,255,0.35); border-radius:5px; color:#33D6FF; font:700 13px 'JetBrains Mono';">›</span>
+          </div>
+          <span style="font:500 10px 'JetBrains Mono'; color:#5C6875;">focused · ring+glow, arrows appear</span>
+        </div>
+        <div style="display:flex; flex-direction:column; gap:6px;">
+          <div style="display:flex; align-items:center; gap:8px; height:34px; padding:0 5px 0 12px; border-radius:7px; background:linear-gradient(180deg,rgba(51,214,255,0.10),rgba(51,214,255,0.05)); border:1px solid #33D6FF; box-shadow:0 0 14px rgba(51,214,255,0.28);">
+            <span style="font:600 13px 'Space Grotesk'; color:#E8EDF2;">Reverb</span><span style="flex:1;"></span>
+            <span style="width:20px; height:22px; display:flex; align-items:center; justify-content:center; border-radius:5px; background:#33D6FF; color:#04141A; font:700 13px 'JetBrains Mono';">‹</span>
+            <span style="font:700 12px 'JetBrains Mono'; color:#7FE6FF;">35%</span>
+            <span style="width:20px; height:22px; display:flex; align-items:center; justify-content:center; border:1px solid rgba(51,214,255,0.35); border-radius:5px; color:#33D6FF; font:700 13px 'JetBrains Mono';">›</span>
+          </div>
+          <span style="font:500 10px 'JetBrains Mono'; color:#5C6875;">adjusting · arrow fills, value flashes 180ms</span>
+        </div>
+        <div style="display:flex; flex-direction:column; gap:6px;">
+          <div style="display:flex; align-items:center; gap:7px; height:34px; padding:0 10px 0 12px; border-radius:7px; border:1px solid transparent;">
+            <span style="font:500 13px 'Space Grotesk'; color:#C7D0DA;">Helmet doubler</span><span style="flex:1;"></span>
+            <span style="width:5px; height:5px; border-radius:50%; background:#33D6FF;"></span>
+            <span style="font:700 12px 'JetBrains Mono'; color:#33D6FF;">ON</span>
+          </div>
+          <span style="font:500 10px 'JetBrains Mono'; color:#5C6875;">toggled-on · LED dot + accent value</span>
+        </div>
+        <div style="display:flex; flex-direction:column; gap:6px;">
+          <div style="display:flex; align-items:center; height:34px; padding:0 10px 0 12px; border-radius:7px; border:1px solid transparent; opacity:0.38;">
+            <span style="font:500 13px 'Space Grotesk'; color:#C7D0DA;">AI character</span><span style="flex:1;"></span>
+            <span style="font:500 12px 'JetBrains Mono'; color:#9AA7B4;">GLaDOS</span>
+          </div>
+          <span style="font:500 10px 'JetBrains Mono'; color:#5C6875;">disabled · whole row 38% opacity</span>
+        </div>
+        <div style="display:flex; flex-direction:column; gap:6px;">
+          <div style="display:flex; align-items:center; gap:7px; height:34px; padding:0 10px 0 12px; border-radius:7px; border:1px solid transparent;">
+            <span style="font:500 13px 'Space Grotesk'; color:#C7D0DA;">AI character</span><span style="flex:1;"></span>
+            <span style="display:flex; align-items:center; gap:7px; animation:vbPulse 1.2s ease-in-out infinite;">
+              <span style="width:5px; height:5px; border-radius:50%; background:#33D6FF;"></span>
+              <span style="font:500 12px 'JetBrains Mono'; color:#9AA7B4;">loading…</span>
+            </span>
+          </div>
+          <span style="font:500 10px 'JetBrains Mono'; color:#5C6875;">loading · pulse 1.2s sine loop</span>
+        </div>
+        <div style="display:flex; flex-direction:column; gap:6px;">
+          <div style="display:flex; align-items:center; gap:7px; height:34px; padding:0 10px 0 12px; border-radius:7px; border:1px solid rgba(255,77,94,0.35); background:linear-gradient(180deg,rgba(255,77,94,0.08),rgba(255,77,94,0.04));">
+            <span style="font:500 13px 'Space Grotesk'; color:#C7D0DA;">AI character</span><span style="flex:1;"></span>
+            <span style="width:5px; height:5px; border-radius:50%; background:#FF4D5E;"></span>
+            <span style="font:700 12px 'JetBrains Mono'; color:#FF4D5E;">error</span>
+          </div>
+          <span style="font:500 10px 'JetBrains Mono'; color:#5C6875;">error · danger ring + tint, no glow</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- Sound tiles -->
+    <div style="display:flex; flex-direction:column; gap:8px;">
+      <span style="font:600 13px 'Space Grotesk'; color:#9AA7B4;">Sound tile · 62px tall · radius 8</span>
+      <div style="display:flex; flex-wrap:wrap; gap:18px; background:#0D1014; border:1px solid #1C222B; border-radius:10px; padding:18px;">
+        <div style="display:flex; flex-direction:column; gap:6px; width:172px;">
+          <div style="height:62px; background:linear-gradient(180deg,#171B22,#13161C); border:1px solid #232A34; border-radius:8px; padding:9px 10px; display:flex; flex-direction:column; justify-content:space-between; box-shadow:0 2px 10px rgba(0,0,0,0.5);">
+            <div style="display:flex; justify-content:space-between; gap:6px;"><span style="font:600 13px 'Space Grotesk'; color:#E8EDF2;">airhorn</span><span style="min-width:16px; height:16px; padding:0 3px; border:1px solid #2C3542; border-radius:4px; color:#9AA7B4; font:700 10px 'JetBrains Mono'; display:flex; align-items:center; justify-content:center;">1</span></div>
+            <span style="font:500 10px 'JetBrains Mono'; color:#5C6875;">1.8s</span>
+          </div>
+          <span style="font:500 10px 'JetBrains Mono'; color:#5C6875;">idle</span>
+        </div>
+        <div style="display:flex; flex-direction:column; gap:6px; width:172px;">
+          <div style="height:62px; background:linear-gradient(180deg,#1D232C,#171B22); border:1px solid #2C3542; border-radius:8px; padding:9px 10px; display:flex; flex-direction:column; justify-content:space-between; box-shadow:0 2px 10px rgba(0,0,0,0.5);">
+            <div style="display:flex; justify-content:space-between; gap:6px;"><span style="font:600 13px 'Space Grotesk'; color:#E8EDF2;">airhorn</span><span style="min-width:16px; height:16px; padding:0 3px; border:1px solid #2C3542; border-radius:4px; color:#9AA7B4; font:700 10px 'JetBrains Mono'; display:flex; align-items:center; justify-content:center;">1</span></div>
+            <span style="font:500 10px 'JetBrains Mono'; color:#9AA7B4;">1.8s</span>
+          </div>
+          <span style="font:500 10px 'JetBrains Mono'; color:#5C6875;">hover · surfaces lift one step</span>
+        </div>
+        <div style="display:flex; flex-direction:column; gap:6px; width:172px;">
+          <div style="height:62px; background:linear-gradient(180deg,rgba(51,214,255,0.10),rgba(51,214,255,0.05)); border:1px solid #33D6FF; border-radius:8px; padding:9px 10px; display:flex; flex-direction:column; justify-content:space-between; box-shadow:0 0 14px rgba(51,214,255,0.28);">
+            <div style="display:flex; justify-content:space-between; gap:6px;"><span style="font:600 13px 'Space Grotesk'; color:#E8EDF2;">airhorn</span><span style="min-width:16px; height:16px; padding:0 3px; border:1px solid rgba(51,214,255,0.45); border-radius:4px; color:#33D6FF; font:700 10px 'JetBrains Mono'; display:flex; align-items:center; justify-content:center;">1</span></div>
+            <span style="font:500 10px 'JetBrains Mono'; color:#33D6FF;">1.8s · ↵ play</span>
+          </div>
+          <span style="font:500 10px 'JetBrains Mono'; color:#5C6875;">focused · same ring+glow recipe</span>
+        </div>
+        <div style="display:flex; flex-direction:column; gap:6px; width:172px;">
+          <div style="height:62px; border-radius:8px; padding:9px 10px; display:flex; flex-direction:column; justify-content:space-between; animation:vbFlash 2s cubic-bezier(0.4,0,1,1) infinite; border:1px solid #232A34;">
+            <div style="display:flex; justify-content:space-between; gap:6px;"><span style="font:600 13px 'Space Grotesk'; color:#E8EDF2;">airhorn</span><span style="min-width:16px; height:16px; padding:0 3px; border:1px solid rgba(232,237,242,0.5); border-radius:4px; color:#E8EDF2; font:700 10px 'JetBrains Mono'; display:flex; align-items:center; justify-content:center;">1</span></div>
+            <span style="font:500 10px 'JetBrains Mono'; color:#E8EDF2;">1.8s</span>
+          </div>
+          <span style="font:500 10px 'JetBrains Mono'; color:#5C6875;">triggered · full accent → decay 250ms (looped demo)</span>
+        </div>
+        <div style="display:flex; flex-direction:column; gap:6px; width:172px;">
+          <div style="height:62px; background:linear-gradient(180deg,#171B22,#13161C); border:1px solid rgba(51,214,255,0.45); border-radius:8px; padding:9px 10px; display:flex; flex-direction:column; justify-content:space-between; box-shadow:0 2px 10px rgba(0,0,0,0.5); position:relative; overflow:hidden;">
+            <div style="display:flex; justify-content:space-between; gap:6px;"><span style="font:600 13px 'Space Grotesk'; color:#E8EDF2;">airhorn</span><span style="min-width:16px; height:16px; padding:0 3px; border:1px solid rgba(51,214,255,0.45); border-radius:4px; color:#33D6FF; font:700 10px 'JetBrains Mono'; display:flex; align-items:center; justify-content:center;">1</span></div>
+            <span style="font:500 10px 'JetBrains Mono'; color:#33D6FF;">▶ 1.8s</span>
+            <span style="position:absolute; left:0; bottom:0; height:2px; width:55%; background:#33D6FF;"></span>
+          </div>
+          <span style="font:500 10px 'JetBrains Mono'; color:#5C6875;">playing · accent ring + progress edge</span>
+        </div>
+        <div style="display:flex; flex-direction:column; gap:6px; width:172px;">
+          <div style="height:62px; background:linear-gradient(180deg,#171B22,#13161C); border:1px solid #232A34; border-radius:8px; padding:9px 10px; display:flex; flex-direction:column; justify-content:space-between; opacity:0.38;">
+            <div style="display:flex; justify-content:space-between; gap:6px;"><span style="font:600 13px 'Space Grotesk'; color:#E8EDF2;">airhorn</span><span style="min-width:16px; height:16px; padding:0 3px; border:1px solid #2C3542; border-radius:4px; color:#9AA7B4; font:700 10px 'JetBrains Mono'; display:flex; align-items:center; justify-content:center;">1</span></div>
+            <span style="font:500 10px 'JetBrains Mono'; color:#5C6875;">1.8s</span>
+          </div>
+          <span style="font:500 10px 'JetBrains Mono'; color:#5C6875;">disabled · 38% opacity</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- Strip buttons -->
+    <div style="display:flex; flex-direction:column; gap:8px;">
+      <span style="font:600 13px 'Space Grotesk'; color:#9AA7B4;">Strip button · 30px tall · radius 7</span>
+      <div style="display:flex; flex-wrap:wrap; gap:18px; background:#0D1014; border:1px solid #1C222B; border-radius:10px; padding:18px; align-items:flex-start;">
+        <div style="display:flex; flex-direction:column; gap:6px; align-items:flex-start;">
+          <div style="height:30px; padding:0 12px; display:flex; align-items:center; border-radius:7px; background:linear-gradient(180deg,#171B22,#13161C); border:1px solid #232A34; font:700 11px 'JetBrains Mono'; letter-spacing:0.5px; color:#9AA7B4;">PAUSE</div>
+          <span style="font:500 10px 'JetBrains Mono'; color:#5C6875;">idle</span>
+        </div>
+        <div style="display:flex; flex-direction:column; gap:6px; align-items:flex-start;">
+          <div style="height:30px; padding:0 12px; display:flex; align-items:center; border-radius:7px; background:linear-gradient(180deg,#1D232C,#171B22); border:1px solid #2C3542; font:700 11px 'JetBrains Mono'; letter-spacing:0.5px; color:#E8EDF2;">PAUSE</div>
+          <span style="font:500 10px 'JetBrains Mono'; color:#5C6875;">hover</span>
+        </div>
+        <div style="display:flex; flex-direction:column; gap:6px; align-items:flex-start;">
+          <div style="height:30px; padding:0 12px; display:flex; align-items:center; border-radius:7px; background:linear-gradient(180deg,#171B22,#13161C); border:1px solid #33D6FF; box-shadow:0 0 14px rgba(51,214,255,0.28); font:700 11px 'JetBrains Mono'; letter-spacing:0.5px; color:#E8EDF2;">PAUSE</div>
+          <span style="font:500 10px 'JetBrains Mono'; color:#5C6875;">focused</span>
+        </div>
+        <div style="display:flex; flex-direction:column; gap:6px; align-items:flex-start;">
+          <div style="height:30px; padding:0 12px; display:flex; align-items:center; border-radius:7px; background:#232B36; border:1px solid #2C3542; font:700 11px 'JetBrains Mono'; letter-spacing:0.5px; color:#E8EDF2;">PAUSE</div>
+          <span style="font:500 10px 'JetBrains Mono'; color:#5C6875;">pressed · instant, release 80ms</span>
+        </div>
+        <div style="display:flex; flex-direction:column; gap:6px; align-items:flex-start;">
+          <div style="height:30px; padding:0 12px; display:flex; align-items:center; gap:7px; border-radius:7px; background:linear-gradient(180deg,rgba(51,214,255,0.10),rgba(51,214,255,0.05)); border:1px solid rgba(51,214,255,0.45); font:700 11px 'JetBrains Mono'; letter-spacing:0.5px; color:#33D6FF;"><span style="width:5px; height:5px; border-radius:50%; background:#33D6FF;"></span>TO MIC: ON</div>
+          <span style="font:500 10px 'JetBrains Mono'; color:#5C6875;">toggled-on</span>
+        </div>
+        <div style="display:flex; flex-direction:column; gap:6px; align-items:flex-start;">
+          <div style="height:30px; padding:0 12px; display:flex; align-items:center; gap:7px; border-radius:7px; background:linear-gradient(180deg,rgba(255,177,61,0.12),rgba(255,177,61,0.06)); border:1px solid rgba(255,177,61,0.5); font:700 11px 'JetBrains Mono'; letter-spacing:0.5px; color:#FFB13D;"><span style="width:5px; height:5px; border-radius:50%; background:#FFB13D;"></span>PAUSED</div>
+          <span style="font:500 10px 'JetBrains Mono'; color:#5C6875;">pause active · amber, label swaps</span>
+        </div>
+        <div style="display:flex; flex-direction:column; gap:6px; align-items:flex-start;">
+          <div style="height:30px; padding:0 12px; display:flex; align-items:center; border-radius:7px; background:linear-gradient(180deg,#171B22,#13161C); border:1px solid #232A34; font:700 11px 'JetBrains Mono'; letter-spacing:0.5px; color:#9AA7B4; opacity:0.38;">STOP</div>
+          <span style="font:500 10px 'JetBrains Mono'; color:#5C6875;">disabled</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- Meter + toast -->
+    <div style="display:flex; gap:22px; flex-wrap:wrap;">
+      <div style="display:flex; flex-direction:column; gap:8px;">
+        <span style="font:600 13px 'Space Grotesk'; color:#9AA7B4;">Mic meter · 22 segments 5×13 · zones 0–15 low / 16–18 mid / 19–21 hot</span>
+        <div style="display:flex; flex-direction:column; gap:14px; background:#0D1014; border:1px solid #1C222B; border-radius:10px; padding:18px;">
+          <div style="display:flex; align-items:center; gap:12px;">
+            <div style="display:flex; gap:2px;"><span style="width:5px; height:13px; background:#3DDC85; border-radius:1px;"></span><span style="width:5px; height:13px; background:#3DDC85; border-radius:1px;"></span><span style="width:5px; height:13px; background:#3DDC85; border-radius:1px;"></span><span style="width:5px; height:13px; background:#3DDC85; border-radius:1px;"></span><span style="width:5px; height:13px; background:#3DDC85; border-radius:1px;"></span><span style="width:5px; height:13px; background:#1A1F26; border-radius:1px;"></span><span style="width:5px; height:13px; background:#1A1F26; border-radius:1px;"></span><span style="width:5px; height:13px; background:#1A1F26; border-radius:1px;"></span><span style="width:5px; height:13px; background:#1A1F26; border-radius:1px;"></span><span style="width:5px; height:13px; background:#1A1F26; border-radius:1px;"></span><span style="width:5px; height:13px; background:#1A1F26; border-radius:1px;"></span><span style="width:5px; height:13px; background:#1A1F26; border-radius:1px;"></span><span style="width:5px; height:13px; background:#1A1F26; border-radius:1px;"></span><span style="width:5px; height:13px; background:#1A1F26; border-radius:1px;"></span><span style="width:5px; height:13px; background:#1A1F26; border-radius:1px;"></span><span style="width:5px; height:13px; background:#1A1F26; border-radius:1px;"></span><span style="width:5px; height:13px; background:#1A1F26; border-radius:1px;"></span><span style="width:5px; height:13px; background:#1A1F26; border-radius:1px;"></span><span style="width:5px; height:13px; background:#1A1F26; border-radius:1px;"></span><span style="width:5px; height:13px; background:#1A1F26; border-radius:1px;"></span><span style="width:5px; height:13px; background:#1A1F26; border-radius:1px;"></span><span style="width:5px; height:13px; background:#1A1F26; border-radius:1px;"></span></div>
+            <span style="font:500 10px 'JetBrains Mono'; color:#5C6875;">quiet · attack 40ms / decay 240ms linear</span>
+          </div>
+          <div style="display:flex; align-items:center; gap:12px;">
+            <div style="display:flex; gap:2px;"><span style="width:5px; height:13px; background:#3DDC85; border-radius:1px;"></span><span style="width:5px; height:13px; background:#3DDC85; border-radius:1px;"></span><span style="width:5px; height:13px; background:#3DDC85; border-radius:1px;"></span><span style="width:5px; height:13px; background:#3DDC85; border-radius:1px;"></span><span style="width:5px; height:13px; background:#3DDC85; border-radius:1px;"></span><span style="width:5px; height:13px; background:#3DDC85; border-radius:1px;"></span><span style="width:5px; height:13px; background:#3DDC85; border-radius:1px;"></span><span style="width:5px; height:13px; background:#3DDC85; border-radius:1px;"></span><span style="width:5px; height:13px; background:#3DDC85; border-radius:1px;"></span><span style="width:5px; height:13px; background:#3DDC85; border-radius:1px;"></span><span style="width:5px; height:13px; background:#3DDC85; border-radius:1px;"></span><span style="width:5px; height:13px; background:#3DDC85; border-radius:1px;"></span><span style="width:5px; height:13px; background:#3DDC85; border-radius:1px;"></span><span style="width:5px; height:13px; background:#3DDC85; border-radius:1px;"></span><span style="width:5px; height:13px; background:#3DDC85; border-radius:1px;"></span><span style="width:5px; height:13px; background:#3DDC85; border-radius:1px;"></span><span style="width:5px; height:13px; background:#FFB13D; border-radius:1px;"></span><span style="width:5px; height:13px; background:#FFB13D; border-radius:1px;"></span><span style="width:5px; height:13px; background:#1A1F26; border-radius:1px;"></span><span style="width:5px; height:13px; background:#FFFFFF; border-radius:1px;"></span><span style="width:5px; height:13px; background:#1A1F26; border-radius:1px;"></span><span style="width:5px; height:13px; background:#1A1F26; border-radius:1px;"></span></div>
+            <span style="font:500 10px 'JetBrains Mono'; color:#5C6875;">loud · white peak-hold 900ms, falls 300ms</span>
+          </div>
+          <div style="display:flex; align-items:center; gap:12px;">
+            <div style="display:flex; gap:2px;"><span style="width:5px; height:13px; background:#3DDC85; border-radius:1px;"></span><span style="width:5px; height:13px; background:#3DDC85; border-radius:1px;"></span><span style="width:5px; height:13px; background:#3DDC85; border-radius:1px;"></span><span style="width:5px; height:13px; background:#3DDC85; border-radius:1px;"></span><span style="width:5px; height:13px; background:#3DDC85; border-radius:1px;"></span><span style="width:5px; height:13px; background:#3DDC85; border-radius:1px;"></span><span style="width:5px; height:13px; background:#3DDC85; border-radius:1px;"></span><span style="width:5px; height:13px; background:#3DDC85; border-radius:1px;"></span><span style="width:5px; height:13px; background:#3DDC85; border-radius:1px;"></span><span style="width:5px; height:13px; background:#3DDC85; border-radius:1px;"></span><span style="width:5px; height:13px; background:#3DDC85; border-radius:1px;"></span><span style="width:5px; height:13px; background:#3DDC85; border-radius:1px;"></span><span style="width:5px; height:13px; background:#3DDC85; border-radius:1px;"></span><span style="width:5px; height:13px; background:#3DDC85; border-radius:1px;"></span><span style="width:5px; height:13px; background:#3DDC85; border-radius:1px;"></span><span style="width:5px; height:13px; background:#3DDC85; border-radius:1px;"></span><span style="width:5px; height:13px; background:#FFB13D; border-radius:1px;"></span><span style="width:5px; height:13px; background:#FFB13D; border-radius:1px;"></span><span style="width:5px; height:13px; background:#FFB13D; border-radius:1px;"></span><span style="width:5px; height:13px; background:#FF4D5E; border-radius:1px;"></span><span style="width:5px; height:13px; background:#FF4D5E; border-radius:1px;"></span><span style="width:5px; height:13px; background:#FF4D5E; border-radius:1px;"></span></div>
+            <span style="font:500 10px 'JetBrains Mono'; color:#FF4D5E;">clipping · all hot segments lit</span>
+          </div>
+        </div>
+      </div>
+      <div style="display:flex; flex-direction:column; gap:8px;">
+        <span style="font:600 13px 'Space Grotesk'; color:#9AA7B4;">Status chip · 20px tall · radius 6</span>
+        <div style="display:flex; flex-direction:column; gap:12px; background:#0D1014; border:1px solid #1C222B; border-radius:10px; padding:18px; align-items:flex-start;">
+          <div style="height:20px; display:flex; align-items:center; gap:7px; padding:0 9px; border-radius:6px; background:rgba(51,214,255,0.08); border:1px solid rgba(51,214,255,0.35);"><span style="width:5px; height:5px; border-radius:50%; background:#33D6FF;"></span><span style="font:500 11px 'JetBrains Mono'; color:#33D6FF;">rvc: model ready</span></div>
+          <div style="height:20px; display:flex; align-items:center; gap:7px; padding:0 9px; border-radius:6px; background:rgba(255,177,61,0.10); border:1px solid rgba(255,177,61,0.4);"><span style="width:5px; height:5px; border-radius:50%; background:#FFB13D;"></span><span style="font:500 11px 'JetBrains Mono'; color:#FFB13D;">audio: output underflow (×3)</span></div>
+          <div style="height:20px; display:flex; align-items:center; gap:7px; padding:0 9px; border-radius:6px; background:rgba(255,77,94,0.10); border:1px solid rgba(255,77,94,0.4);"><span style="width:5px; height:5px; border-radius:50%; background:#FF4D5E;"></span><span style="font:500 11px 'JetBrains Mono'; color:#FF4D5E;">device lost: CABLE Input</span></div>
+          <span style="font:500 10px 'JetBrains Mono'; color:#5C6875;">in 160ms easeOut (fade + rise 8px) · hold 4s · out 220ms easeIn</span>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ 03 MOTION ============ -->
+  <section style="display:flex; flex-direction:column; gap:14px; width:760px;">
+    <span style="font:700 11px 'JetBrains Mono'; letter-spacing:2px; color:#5C6875;">03 — MOTION SPEC · all values also in tokens JSON</span>
+    <div style="background:#0D1014; border:1px solid #1C222B; border-radius:10px; padding:6px 18px; font:500 12px 'JetBrains Mono'; color:#C7D0DA; display:flex; flex-direction:column;">
+      <div style="display:grid; grid-template-columns:190px 90px 110px 1fr; gap:12px; padding:10px 0; color:#5C6875; font-weight:700; font-size:10px; letter-spacing:1px; border-bottom:1px solid #1C222B;"><span>ANIMATION</span><span>DURATION</span><span>EASING</span><span>WHAT INTERPOLATES</span></div>
+      <div style="display:grid; grid-template-columns:190px 90px 110px 1fr; gap:12px; padding:9px 0; border-bottom:1px solid #12161C;"><span style="color:#E8EDF2;">focus move</span><span>120ms</span><span>easeOut</span><span style="color:#9AA7B4;">highlight rect y + height between rows/tiles</span></div>
+      <div style="display:grid; grid-template-columns:190px 90px 110px 1fr; gap:12px; padding:9px 0; border-bottom:1px solid #12161C;"><span style="color:#E8EDF2;">list / grid scroll</span><span>140ms</span><span>easeOut</span><span style="color:#9AA7B4;">scrollTop; thumb tracks same frame</span></div>
+      <div style="display:grid; grid-template-columns:190px 90px 110px 1fr; gap:12px; padding:9px 0; border-bottom:1px solid #12161C;"><span style="color:#E8EDF2;">hover in / out</span><span>90 / 150ms</span><span>easeOut</span><span style="color:#9AA7B4;">bg + border + text color</span></div>
+      <div style="display:grid; grid-template-columns:190px 90px 110px 1fr; gap:12px; padding:9px 0; border-bottom:1px solid #12161C;"><span style="color:#E8EDF2;">press in / out</span><span>0 / 80ms</span><span>easeOut</span><span style="color:#9AA7B4;">bg jumps to active, releases back</span></div>
+      <div style="display:grid; grid-template-columns:190px 90px 110px 1fr; gap:12px; padding:9px 0; border-bottom:1px solid #12161C;"><span style="color:#E8EDF2;">tile trigger flash</span><span>250ms</span><span>easeIn</span><span style="color:#9AA7B4;">full accentDim fill + glow → idle (on: instant)</span></div>
+      <div style="display:grid; grid-template-columns:190px 90px 110px 1fr; gap:12px; padding:9px 0; border-bottom:1px solid #12161C;"><span style="color:#E8EDF2;">value nudge</span><span>180ms</span><span>easeOut</span><span style="color:#9AA7B4;">value text accentBright → accent after &lt; &gt;</span></div>
+      <div style="display:grid; grid-template-columns:190px 90px 110px 1fr; gap:12px; padding:9px 0; border-bottom:1px solid #12161C;"><span style="color:#E8EDF2;">meter attack / decay</span><span>40 / 240ms</span><span>linear</span><span style="color:#9AA7B4;">lit-segment count toward target level</span></div>
+      <div style="display:grid; grid-template-columns:190px 90px 110px 1fr; gap:12px; padding:9px 0; border-bottom:1px solid #12161C;"><span style="color:#E8EDF2;">peak hold</span><span>900+300ms</span><span>easeIn</span><span style="color:#9AA7B4;">white segment holds, then falls</span></div>
+      <div style="display:grid; grid-template-columns:190px 90px 110px 1fr; gap:12px; padding:9px 0; border-bottom:1px solid #12161C;"><span style="color:#E8EDF2;">toast in / out</span><span>160 / 220ms</span><span>out / in</span><span style="color:#9AA7B4;">opacity + y offset 8px; hold 4s</span></div>
+      <div style="display:grid; grid-template-columns:190px 90px 110px 1fr; gap:12px; padding:9px 0;"><span style="color:#E8EDF2;">AI loading pulse</span><span>1200ms ∞</span><span>sine</span><span style="color:#9AA7B4;">value opacity 0.4 ↔ 1.0</span></div>
+    </div>
+    <span style="font:500 11px 'JetBrains Mono'; color:#5C6875;">pygame port: easeOut(t) = 1−(1−t)², easeIn(t) = t². One lerp per animation — no springs.</span>
+  </section>
+
+  <!-- ============ 04 RATIONALE ============ -->
+  <section style="display:flex; flex-direction:column; gap:12px; width:760px;">
+    <span style="font:700 11px 'JetBrains Mono'; letter-spacing:2px; color:#5C6875;">04 — FOCUS MODEL &amp; HIERARCHY</span>
+    <div style="background:#0D1014; border:1px solid #1C222B; border-radius:10px; padding:20px 22px; font:400 13.5px/1.65 'Space Grotesk'; color:#C7D0DA; display:flex; flex-direction:column; gap:10px;">
+      <p style="margin:0;"><strong style="color:#E8EDF2;">One focus, one recipe.</strong> Exactly one element owns focus at a time — a settings row, a tile, or a strip button. Focus is always the same recipe: 1px accent ring + accent tint fill (2-stop) + the single glow shadow. Nothing else in the UI uses the glow, so the focused element is findable at a glance from across the room. Left/right pane switch is a single keypress; the highlight physically slides (120ms) instead of teleporting, so the eye never loses it.</p>
+      <p style="margin:0;"><strong style="color:#E8EDF2;">State is color-coded, not shape-coded.</strong> Cyan = active/selected, amber = paused/warning, red = error/clip, gray = off. Hover only lifts surfaces one step and never uses accent, so keyboard focus and mouse hover can coexist without ambiguity. The &lt; &gt; arrows exist only on the focused row — they double as the "this row is adjustable" affordance.</p>
+      <p style="margin:0;"><strong style="color:#E8EDF2;">Hierarchy.</strong> Labels are Space Grotesk (human words); every value, badge, hotkey, and readout is JetBrains Mono (machine data) — the two-font split is the entire information hierarchy. Values that differ from default render bright; "off" stays faint, so a scan down the list reads like a channel strip: you see what's engaged. Section headers are deliberately quiet hairlines — wayfinding, not content.</p>
+    </div>
+  </section>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props="{
+  &quot;aiState&quot;: { &quot;editor&quot;: &quot;enum&quot;, &quot;options&quot;: [&quot;loading&quot;, &quot;ready&quot;, &quot;error&quot;], &quot;default&quot;: &quot;loading&quot;, &quot;tsType&quot;: &quot;'loading' | 'ready' | 'error'&quot;, &quot;section&quot;: &quot;Demo state&quot; },
+  &quot;pixelGrid&quot;: { &quot;editor&quot;: &quot;boolean&quot;, &quot;default&quot;: false, &quot;tsType&quot;: &quot;boolean&quot;, &quot;section&quot;: &quot;Porting aids&quot; }
+}">
+class Component extends DCLogic {
+  state = { lt: 4, lh: 120, gt: 4, gh: 150 };
+
+  _measure(el) {
+    const trackH = el.clientHeight - 8;
+    const h = Math.max(24, Math.round(trackH * el.clientHeight / el.scrollHeight));
+    const denom = el.scrollHeight - el.clientHeight;
+    const t = 4 + (denom > 0 ? (el.scrollTop / denom) * (trackH - h) : 0);
+    return { t: Math.round(t), h };
+  }
+
+  componentDidMount() {
+    if (this._left) { const m = this._measure(this._left); this.setState({ lt: m.t, lh: m.h }); }
+    if (this._grid) { const m = this._measure(this._grid); this.setState({ gt: m.t, gh: m.h }); }
+  }
+
+  renderVals() {
+    const aiState = this.props.aiState ?? 'loading';
+    return {
+      pixelGrid: !!(this.props.pixelGrid ?? false),
+      aiLoading: aiState === 'loading',
+      aiReady: aiState === 'ready',
+      aiError: aiState === 'error',
+      leftRef: (el) => { this._left = el; },
+      gridRef: (el) => { this._grid = el; },
+      onLeftScroll: (e) => { const m = this._measure(e.target); this.setState({ lt: m.t, lh: m.h }); },
+      onGridScroll: (e) => { const m = this._measure(e.target); this.setState({ gt: m.t, gh: m.h }); },
+      leftThumbTop: this.state.lt,
+      leftThumbH: this.state.lh,
+      gridThumbTop: this.state.gt,
+      gridThumbH: this.state.gh
+    };
+  }
+}
+</script>
+</body>
+</html>
