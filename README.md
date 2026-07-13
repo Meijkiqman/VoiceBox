@@ -33,8 +33,12 @@ real mic --> [VoiceBox: pitch/effects/soundboard | or RVC AI voice] --> VB-CABLE
   voice (SAPI) and cached in `tts_cache/`.
 - **Global hotkeys** - the soundboard works while a game or Discord has
   focus: Ctrl+Alt+1-9 fire clips, Ctrl+Alt+0 stops everything, Ctrl+Alt+P
-  cycles presets. Remappable in `controls.json` (`"global"` section);
-  toggleable from the SYSTEM menu.
+  cycles presets, Ctrl+Alt+M toggles mute. Remappable in `controls.json`
+  (`"global"` section); toggleable from the SYSTEM menu.
+- **Mic mute + push-to-talk** - mute from the menu, the `M` key, or the
+  global hotkey; the header shows MUTED while the soundboard and TTS keep
+  working. Bind a `"ptt"` key in `controls.json` for hold-to-talk (the mic
+  stays muted except while the key is held).
 - **Test - hear myself** self-listen, live mic meter with peak-hold,
   keyboard + mouse + game controller navigation, remappable controls
   (`controls.json`), crash-proof against malformed config.

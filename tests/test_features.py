@@ -50,6 +50,23 @@ cb(silent, out, frames, None, None)
 check("Normal preset restores passthrough",
       abs(state.shifter.ratio - 1.0) < 1e-9 and state.drive == 0.0)
 
+# ------------------------------------------------------------------ mic mute
+with state.lock:
+    state.mic_muted = True
+loud = np.full((frames, 1), 0.5, dtype=np.float32)
+cb(loud, out, frames, None, None)
+check("mute silences the mic", np.abs(out).max() == 0.0)
+check("meter still reads the muted mic", state.in_level == 0.5)
+state.events.put(0)                       # soundboard clip while muted
+cb(loud, out, frames, None, None)
+check("soundboard plays while muted", np.abs(out).max() > 0.05)
+state.events.put("stop")
+cb(loud, out, frames, None, None)
+with state.lock:
+    state.mic_muted = False
+cb(loud, out, frames, None, None)
+check("unmute restores the voice", np.abs(out).max() > 0.4)
+
 # ------------------------------------------------------------------- grit dsp
 with state.lock:
     state.drive = 1.0
@@ -96,7 +113,7 @@ stop_flag = threading.Event()
 menu = voicebox.Menu(state, stop_flag, voicebox.Monitor(state, True))
 labels = [it.label for it in menu.items]
 check("settings rows in order",
-      labels == ["Preset", "Pitch", "Robot voice", "Helmet doubler",
+      labels == ["Preset", "Pitch", "Mic", "Robot voice", "Helmet doubler",
                  "Grit / growl", "Reverb", "Echo", "Radio voice", "Bass boost",
                  "Voice volume", "Clip volume", "TTS voice FX", "TTS volume",
                  "Test - hear myself", "Sounds to mic", "Pause sounds",

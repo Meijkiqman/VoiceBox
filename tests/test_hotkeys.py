@@ -17,6 +17,8 @@ class FakeKeyboard(types.ModuleType):
     def __init__(self):
         super().__init__("keyboard")
         self.hotkeys = {}              # handle -> (combo, fn)
+        self.press_hooks = {}          # handle -> (key, fn)
+        self.release_hooks = {}        # handle -> (key, fn)
         self.next_handle = 0
         self.fail_on = None            # combo that raises (permission test)
 
@@ -30,10 +32,34 @@ class FakeKeyboard(types.ModuleType):
     def remove_hotkey(self, handle):
         del self.hotkeys[handle]
 
+    def on_press_key(self, key, fn):
+        self.next_handle += 1
+        self.press_hooks[self.next_handle] = (key, fn)
+        return self.next_handle
+
+    def on_release_key(self, key, fn):
+        self.next_handle += 1
+        self.release_hooks[self.next_handle] = (key, fn)
+        return self.next_handle
+
+    def unhook(self, handle):
+        self.press_hooks.pop(handle, None)
+        self.release_hooks.pop(handle, None)
+
     def fire(self, combo):
         for c, fn in list(self.hotkeys.values()):
             if c == combo:
                 fn()
+
+    def press(self, key):
+        for k, fn in list(self.press_hooks.values()):
+            if k == key:
+                fn(None)
+
+    def release(self, key):
+        for k, fn in list(self.release_hooks.values()):
+            if k == key:
+                fn(None)
 
 
 def with_fake(cfg=None):
@@ -84,6 +110,20 @@ hk.toggle()
 check("toggle back on re-registers", hk.on and len(fake.hotkeys) == 4)
 hk.close()
 check("close unregisters", not hk.on and len(fake.hotkeys) == 0)
+
+# --------------------------------------------------------------- mute + PTT
+fake, state, board, hk = with_fake(
+    {"global": {"mute": "ctrl+alt+m", "ptt": "f8"}})
+check("PTT arms mute-by-default", state.mic_muted is True)
+fake.press("f8")
+check("PTT press goes live", state.mic_muted is False)
+fake.release("f8")
+check("PTT release re-mutes", state.mic_muted is True)
+fake.fire("ctrl+alt+m")
+check("mute hotkey toggles", state.mic_muted is False)
+hk.disable()
+check("disable removes PTT hooks too",
+      not fake.press_hooks and not fake.release_hooks)
 
 # ------------------------------------------------- blank / disabled bindings
 fake, state, board, hk = with_fake(

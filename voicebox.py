@@ -132,6 +132,7 @@ DEFAULT_CONTROLS = {
         "select":     ["return", "space"],
         "back":       ["escape"],
         "stop_clips": ["0", "backspace"],
+        "mute":       ["m"],
         "clips":      ["1", "2", "3", "4", "5", "6", "7", "8", "9"],
     },
     "gamepad": {
@@ -151,6 +152,10 @@ DEFAULT_CONTROLS = {
                         "ctrl+alt+7", "ctrl+alt+8", "ctrl+alt+9"],
         "stop_clips":  "ctrl+alt+0",
         "next_preset": "ctrl+alt+p",
+        "mute":        "ctrl+alt+m",
+        # push-to-talk: a single key name; while held the mic is live, on
+        # release it mutes. Empty = off (mute stays a manual toggle).
+        "ptt":         "",
     },
 }
 
@@ -330,6 +335,7 @@ class State:
     def __init__(self):
         self.lock = threading.Lock()
         self.semitones = 0.0          # UI-side display value; the shifter follows via events
+        self.mic_muted = False        # silences the mic (TTS + soundboard keep working)
         self.robot = 0.0              # robot/vocoder mix, 0..1 (0 = off)
         self.robot_phase = 0.0
         self.voice_gain = 1.0
@@ -444,6 +450,7 @@ def make_callback(state):
             reverb, echo, radio = state.reverb, state.echo, state.radio
             doubler, bass = state.doubler, state.bass
             ai_mute, tts_gain = state.ai_mute, state.tts_gain
+            mic_muted = state.mic_muted
 
         # apply queued UI events (audio thread owns the shifter and voice list)
         while not state.events.empty():
@@ -481,7 +488,12 @@ def make_callback(state):
             y = np.zeros(frames, dtype=np.float32)
             carry = np.zeros(0, dtype=np.float32)
         else:
-            x = indata[:, 0].astype(np.float32) * voice_gain
+            # muted: the voice drops out but fx-tagged TTS still rides the
+            # chain, so saved phrases remain usable as a stand-in voice
+            if mic_muted:
+                x = np.zeros(frames, dtype=np.float32)
+            else:
+                x = indata[:, 0].astype(np.float32) * voice_gain
             if tts_pre is not None:
                 x = x + tts_pre * tts_gain
             y = state.shifter.process(x)
@@ -1062,12 +1074,13 @@ class GlobalHotkeys:
         self.error = ""
         self._kb = None                # the keyboard module while registered
         self._handles = []
+        self._hooks = []               # PTT press/release hooks (unhook to undo)
         if self.cfg.get("enabled", True):
             self.enable()
 
     @property
     def on(self):
-        return bool(self._handles)
+        return bool(self._handles or self._hooks)
 
     def _bindings(self):
         """(combo, handler) pairs from config; blank combos are skipped."""
@@ -1081,41 +1094,68 @@ class GlobalHotkeys:
             out.append((str(self.cfg["stop_clips"]), self.board.stop))
         if self.cfg.get("next_preset"):
             out.append((str(self.cfg["next_preset"]), self._next_preset))
+        if self.cfg.get("mute"):
+            out.append((str(self.cfg["mute"]), self._toggle_mute))
         return out
 
     def _next_preset(self):
         self.state.apply_preset(self.state.preset_idx + 1)
 
+    def _toggle_mute(self):
+        with self.state.lock:
+            self.state.mic_muted = not self.state.mic_muted
+
+    def _set_mute(self, muted):
+        with self.state.lock:
+            self.state.mic_muted = muted
+
     def enable(self):
-        if self._handles:
+        if self.on:
             return
         try:
             import keyboard                # deferred: import can itself fail
         except Exception as e:
             self.error = f"global hotkeys off: {e}"
             return
-        handles = []
+        handles, hooks = [], []
         try:
             for combo, fn in self._bindings():
                 handles.append(keyboard.add_hotkey(combo, fn))
+            ptt = self.cfg.get("ptt")
+            if ptt:                        # hold-to-talk: live on press, muted on release
+                hooks.append(keyboard.on_press_key(
+                    str(ptt), lambda e: self._set_mute(False)))
+                hooks.append(keyboard.on_release_key(
+                    str(ptt), lambda e: self._set_mute(True)))
+                self._set_mute(True)       # PTT implies mute-by-default
         except Exception as e:             # bad combo string / no permission
             for h in handles:
                 try:
                     keyboard.remove_hotkey(h)
                 except Exception:
                     pass
+            for h in hooks:
+                try:
+                    keyboard.unhook(h)
+                except Exception:
+                    pass
             self.error = f"global hotkeys off: {e}"
             return
         self._kb = keyboard
-        self._handles = handles
+        self._handles, self._hooks = handles, hooks
         self.error = ""
 
     def disable(self):
-        kb, handles = self._kb, self._handles
-        self._kb, self._handles = None, []
+        kb, handles, hooks = self._kb, self._handles, self._hooks
+        self._kb, self._handles, self._hooks = None, [], []
         for h in handles:
             try:
                 kb.remove_hotkey(h)
+            except Exception:
+                pass
+        for h in hooks:
+            try:
+                kb.unhook(h)
             except Exception:
                 pass
 
@@ -1181,6 +1221,10 @@ class Menu:
                      lambda: f"{s.semitones:+.0f} st" if s.semitones else "off",
                      select=lambda: s.set_pitch(0),
                      adjust=lambda d: s.set_pitch(s.semitones + d)),
+            MenuItem("Mic",
+                     lambda: "MUTED" if s.mic_muted else "live",
+                     select=self.toggle_mute,
+                     adjust=lambda d: self.toggle_mute()),
             MenuItem("Robot voice",
                      lambda: f"{s.robot:.0%}" if s.robot else "off",
                      select=self._toggle_robot,
@@ -1253,6 +1297,10 @@ class Menu:
                                    adjust=lambda d: b.toggle_pause()))
         self.items.append(MenuItem("Stop all sounds", select=b.stop))
         self.items.append(MenuItem("Quit", select=self.stop_flag.set, flash=False))
+
+    def toggle_mute(self):
+        with self.state.lock:
+            self.state.mic_muted = not self.state.mic_muted
 
     def _toggle_robot(self):
         with self.state.lock:
@@ -1511,7 +1559,7 @@ def run_ui(state, stop_flag, dev_line, err_line="", monitor=None, board=None,
                             TTS_TOP - GRID_TOP)
 
     SECTION_OF = {
-        "Preset": "VOICE", "Pitch": "VOICE",
+        "Preset": "VOICE", "Pitch": "VOICE", "Mic": "VOICE",
         "Robot voice": "EFFECTS", "Helmet doubler": "EFFECTS",
         "Grit / growl": "EFFECTS", "Reverb": "EFFECTS", "Echo": "EFFECTS",
         "Radio voice": "EFFECTS", "Bass boost": "EFFECTS",
@@ -1628,6 +1676,8 @@ def run_ui(state, stop_flag, dev_line, err_line="", monitor=None, board=None,
             return f_valF, CLR["accent"], CLR["accent"]
         if val == "PAUSED":
             return f_valF, CLR["warning"], CLR["warning"]
+        if val == "MUTED":
+            return f_valF, CLR["danger"], CLR["danger"]
         if val == "error":
             return f_valF, CLR["danger"], CLR["danger"]
         if val.startswith("loading"):
@@ -1747,6 +1797,7 @@ def run_ui(state, stop_flag, dev_line, err_line="", monitor=None, board=None,
                 elif act == "select":     menu.on_select()
                 elif act == "back":       menu.on_back()
                 elif act == "stop_clips": board.stop()
+                elif act == "mute":       menu.toggle_mute()
 
             elif event.type == pygame.KEYUP:
                 held_keys.discard(event.key)
@@ -1870,7 +1921,8 @@ def run_ui(state, stop_flag, dev_line, err_line="", monitor=None, board=None,
         elif now - peak_at > 0.9:                      # hold 900ms, fall 300ms
             peak_lit = max(meter_lit, peak_lit - dt / 0.300 * 22.0)
         mx_right = WINDOW_SIZE[0] - 16
-        db_s = T(f_small, f"{max(db, -60.0):5.1f} dB", CLR["muted"])
+        db_s = (T(f_small, "MUTED", CLR["danger"]) if state.mic_muted
+                else T(f_small, f"{max(db, -60.0):5.1f} dB", CLR["muted"]))
         screen.blit(db_s, (mx_right - db_s.get_width(),
                            (HEADER_H - db_s.get_height()) // 2))
         seg_x0 = mx_right - 52 - 10 - (22 * 7 - 2)
