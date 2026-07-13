@@ -16,5 +16,14 @@
     "stop_clips":     [3],
     "axis_threshold": 0.5,
     "nav_cooldown":   0.22
+  },
+  "global": {
+    "_comment":    "system-wide hotkeys (keyboard-package combos); they work while a game or Discord has focus. Set enabled false or blank a binding to skip it.",
+    "enabled":     true,
+    "clips":       ["ctrl+alt+1", "ctrl+alt+2", "ctrl+alt+3",
+                    "ctrl+alt+4", "ctrl+alt+5", "ctrl+alt+6",
+                    "ctrl+alt+7", "ctrl+alt+8", "ctrl+alt+9"],
+    "stop_clips":  "ctrl+alt+0",
+    "next_preset": "ctrl+alt+p"
   }
 }

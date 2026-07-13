@@ -31,6 +31,10 @@ real mic --> [VoiceBox: pitch/effects/soundboard | or RVC AI voice] --> VB-CABLE
   chain as your voice - and through the AI voice while the worker is live;
   toggle it off for clean TTS. Speech is rendered once with the Windows
   voice (SAPI) and cached in `tts_cache/`.
+- **Global hotkeys** - the soundboard works while a game or Discord has
+  focus: Ctrl+Alt+1-9 fire clips, Ctrl+Alt+0 stops everything, Ctrl+Alt+P
+  cycles presets. Remappable in `controls.json` (`"global"` section);
+  toggleable from the SYSTEM menu.
 - **Test - hear myself** self-listen, live mic meter with peak-hold,
   keyboard + mouse + game controller navigation, remappable controls
   (`controls.json`), crash-proof against malformed config.

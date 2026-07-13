@@ -141,6 +141,17 @@ DEFAULT_CONTROLS = {
         "axis_threshold": 0.5,
         "nav_cooldown":   0.22,
     },
+    # System-wide hotkeys (optional `keyboard` package): the soundboard keeps
+    # working while a game or Discord has focus. Names are keyboard-package
+    # combos ("ctrl+alt+1"). Set "enabled" false or empty a binding to skip it.
+    "global": {
+        "enabled":     True,
+        "clips":       ["ctrl+alt+1", "ctrl+alt+2", "ctrl+alt+3",
+                        "ctrl+alt+4", "ctrl+alt+5", "ctrl+alt+6",
+                        "ctrl+alt+7", "ctrl+alt+8", "ctrl+alt+9"],
+        "stop_clips":  "ctrl+alt+0",
+        "next_preset": "ctrl+alt+p",
+    },
 }
 
 # ----------------------------------------------------------------------------- DSP
@@ -1027,12 +1038,95 @@ def load_controls():
     cfg = json.loads(json.dumps(DEFAULT_CONTROLS))     # deep copy
     try:
         user = json.loads(CONTROLS_PATH.read_text(encoding="utf-8"))
-        for section in ("keyboard", "gamepad"):
+        for section in ("keyboard", "gamepad", "global"):
             if isinstance(user.get(section), dict):
                 cfg[section].update(user[section])
     except (OSError, json.JSONDecodeError, TypeError):
         pass
     return cfg
+
+
+class GlobalHotkeys:
+    """System-wide hotkeys (controls.json "global" section) so the soundboard
+    stays usable while a game or Discord has focus. Uses the optional
+    `keyboard` package; when it is missing or lacks permission (Linux without
+    root) VoiceBox degrades to window-only input instead of failing. Handlers
+    fire on the keyboard package's listener thread - everything they call
+    (Board.play/stop via queues, apply_preset under the state lock) is
+    thread-safe already."""
+
+    def __init__(self, state, board, cfg=None):
+        self.state = state
+        self.board = board
+        self.cfg = (cfg or load_controls()).get("global") or {}
+        self.error = ""
+        self._kb = None                # the keyboard module while registered
+        self._handles = []
+        if self.cfg.get("enabled", True):
+            self.enable()
+
+    @property
+    def on(self):
+        return bool(self._handles)
+
+    def _bindings(self):
+        """(combo, handler) pairs from config; blank combos are skipped."""
+        out = []
+        clips = self.cfg.get("clips")
+        if isinstance(clips, list):
+            for i, combo in enumerate(clips):
+                if combo:
+                    out.append((str(combo), lambda i=i: self.board.play(i)))
+        if self.cfg.get("stop_clips"):
+            out.append((str(self.cfg["stop_clips"]), self.board.stop))
+        if self.cfg.get("next_preset"):
+            out.append((str(self.cfg["next_preset"]), self._next_preset))
+        return out
+
+    def _next_preset(self):
+        self.state.apply_preset(self.state.preset_idx + 1)
+
+    def enable(self):
+        if self._handles:
+            return
+        try:
+            import keyboard                # deferred: import can itself fail
+        except Exception as e:
+            self.error = f"global hotkeys off: {e}"
+            return
+        handles = []
+        try:
+            for combo, fn in self._bindings():
+                handles.append(keyboard.add_hotkey(combo, fn))
+        except Exception as e:             # bad combo string / no permission
+            for h in handles:
+                try:
+                    keyboard.remove_hotkey(h)
+                except Exception:
+                    pass
+            self.error = f"global hotkeys off: {e}"
+            return
+        self._kb = keyboard
+        self._handles = handles
+        self.error = ""
+
+    def disable(self):
+        kb, handles = self._kb, self._handles
+        self._kb, self._handles = None, []
+        for h in handles:
+            try:
+                kb.remove_hotkey(h)
+            except Exception:
+                pass
+
+    def toggle(self):
+        self.disable() if self.on else self.enable()
+        if self.error:                     # surface why it would not start
+            self.state.status_msg = self.error
+            self.state.status_at = time.time()
+
+    def close(self):
+        self.disable()
 
 
 def build_keymap(cfg, pygame):
@@ -1067,12 +1161,14 @@ class Menu:
     """Single screen. Keyboard handlers call the same on_* methods the
     controller uses, so behavior is identical across input devices."""
 
-    def __init__(self, state, stop_flag, monitor=None, board=None, ai=None):
+    def __init__(self, state, stop_flag, monitor=None, board=None, ai=None,
+                 hotkeys=None):
         self.state = state
         self.stop_flag = stop_flag
         self.monitor = monitor
         self.board = board if board is not None else Board(state)
         self.ai = ai
+        self.hotkeys = hotkeys
         self.sel = 0
         self.flash = {}               # item index -> flash-until timestamp
         s = state
@@ -1140,6 +1236,12 @@ class Menu:
                 lambda: "ON" if monitor.on else "off",
                 select=self._toggle_monitor,
                 adjust=lambda d: self._toggle_monitor()))
+        if hotkeys is not None:
+            self.items.append(MenuItem(
+                "Global hotkeys",
+                lambda: "ON" if hotkeys.on else "off",
+                select=hotkeys.toggle,
+                adjust=lambda d: hotkeys.toggle()))
         b = self.board
         self.items.append(MenuItem("Sounds to mic",
                                    lambda: "ON" if s.clips_to_mic else "off",
@@ -1194,7 +1296,7 @@ class Menu:
 
 
 def run_ui(state, stop_flag, dev_line, err_line="", monitor=None, board=None,
-           ai=None, tts=None):
+           ai=None, tts=None, hotkeys=None):
     """VoiceBox skin, ported from design/VoiceBox Skin.dc.html.
 
     Faithful to the tokens JSON + motion spec in that file: Space Grotesk for
@@ -1294,7 +1396,7 @@ def run_ui(state, stop_flag, dev_line, err_line="", monitor=None, board=None,
     f_strip = _font("JetBrainsMono-Bold.ttf", 11, "consolas", True)
     f_foot = _font("JetBrainsMono-Medium.ttf", 11, "consolas")
 
-    menu = Menu(state, stop_flag, monitor, board, ai)
+    menu = Menu(state, stop_flag, monitor, board, ai, hotkeys)
     board = menu.board
     if tts is None:
         tts = TTSBank(state, getattr(board, "player", None), monitor, ai)
@@ -1418,7 +1520,8 @@ def run_ui(state, stop_flag, dev_line, err_line="", monitor=None, board=None,
         "TTS voice FX": "TTS", "TTS volume": "TTS",
         "Sounds to mic": "SOUNDS", "Pause sounds": "SOUNDS",
         "Stop all sounds": "SOUNDS",
-        "Test - hear myself": "SYSTEM", "Quit": "SYSTEM",
+        "Test - hear myself": "SYSTEM", "Global hotkeys": "SYSTEM",
+        "Quit": "SYSTEM",
     }
     layout, row_pos = [], {}
     y_acc, last_sec = LIST_PAD_TOP, None
@@ -2304,17 +2407,19 @@ def main():
     ai = AiVoice(state)
     tts = TTSBank(state, player, monitor, ai)
     tts.warm()                    # synthesize saved phrases in the background
+    hotkeys = GlobalHotkeys(state, board)
     try:
         if stream:
             with stream:
                 run_ui(state, stop_flag, dev_line, err_line, monitor, board,
-                       ai, tts)
+                       ai, tts, hotkeys)
         else:
             run_ui(state, stop_flag, dev_line, err_line, monitor, board,
-                   ai, tts)
+                   ai, tts, hotkeys)
     except KeyboardInterrupt:
         pass
     finally:
+        hotkeys.close()
         ai.stop()
         monitor.close()
         player.close()
