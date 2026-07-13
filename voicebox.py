@@ -772,6 +772,7 @@ class AudioEngine:
         self.dev_line = ""
         self.in_name = "default mic"   # resolved names for the UI
         self.out_name = "default out"
+        self.latency_ms = None         # reported stream latency, for the footer
 
     def _report(self, msg):
         self.state.status_msg = msg
@@ -811,11 +812,19 @@ class AudioEngine:
                                callback=make_callback(self.state))
             stream.start()
             self.stream = stream
+            try:                       # duplex streams report (input, output)
+                lat = stream.latency
+                self.latency_ms = 1000.0 * (sum(lat)
+                                            if isinstance(lat, (tuple, list))
+                                            else float(lat))
+            except Exception:
+                self.latency_ms = None
             self.error = ""
             return True
         except (SystemExit, Exception) as e:
             self.stream = None
             self.dev_line = ""
+            self.latency_ms = None
             self.error = f"audio unavailable: {e}"
             return False
 
@@ -3008,6 +3017,18 @@ def run_ui(state, stop_flag, dev_line, err_line="", monitor=None, board=None,
                 psur = T(f_foot, ptxt, pcol)
                 screen.blit(psur, (fx, fy - psur.get_height() // 2))
                 fx += psur.get_width()
+
+        # latency + underrun tally (right side; the status chip, which uses
+        # the same corner, takes precedence while it is up)
+        chip_up = state.status_msg and (now - state.status_at) < 4.38
+        if engine is not None and engine.latency_ms and not chip_up:
+            stat = f"{engine.latency_ms:.0f} ms latency"
+            if state.status_count:
+                stat += f" · {state.status_count} drops"
+            ss = T(f_foot, stat,
+                   CLR["warning"] if state.status_count else CLR["faint"])
+            screen.blit(ss, (WINDOW_SIZE[0] - 14 - ss.get_width(),
+                             fy - ss.get_height() // 2))
 
         # status toast chip: in 160ms / hold 4s / out 220ms
         if state.status_msg:

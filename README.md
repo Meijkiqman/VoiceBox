@@ -56,6 +56,7 @@ real mic --> [VoiceBox: pitch/effects/soundboard | or RVC AI voice] --> VB-CABLE
   effects + soundboard + TTS) to `recordings/*.wav`, handy for testing
   presets or keeping funny moments.
 - **Test - hear myself** self-listen, live mic meter with peak-hold,
+  a footer latency/underrun readout (for tuning `BLOCKSIZE`),
   keyboard + mouse + game controller navigation, remappable controls
   (`controls.json`), crash-proof against malformed config.
 

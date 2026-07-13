@@ -12,6 +12,7 @@ class FakeStream:
         self.kw = kw
         self.started = False
         self.closed = False
+        self.latency = (0.010, 0.020)
 
     def start(self):
         self.started = True
@@ -58,6 +59,8 @@ check("stream started on the cable",
       eng.stream.started and eng.stream.kw["device"] == (None, 2))
 check("dev line names both ends",
       "default mic" in eng.dev_line and "CABLE Input" in eng.dev_line)
+check("engine reports round-trip latency",
+      eng.latency_ms is not None and abs(eng.latency_ms - 30.0) < 0.01)
 
 # ------------------------------------------------------------------- options
 check("input options: default + input-capable devices",
@@ -112,6 +115,7 @@ bad = voicebox.AudioEngine(voicebox.State())
 check("stream failure keeps the UI alive",
       bad.open() is False and bad.stream is None
       and bad.error.startswith("audio unavailable"))
+check("failed open clears the latency readout", bad.latency_ms is None)
 
 voicebox.sd = FakeSD(devices=[])
 none = voicebox.AudioEngine(voicebox.State())
