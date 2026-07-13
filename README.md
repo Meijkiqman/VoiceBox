@@ -39,6 +39,10 @@ real mic --> [VoiceBox: pitch/effects/soundboard | or RVC AI voice] --> VB-CABLE
   global hotkey; the header shows MUTED while the soundboard and TTS keep
   working. Bind a `"ptt"` key in `controls.json` for hold-to-talk (the mic
   stays muted except while the key is held).
+- **Noise gate** - replaces the Discord suppression you had to turn off:
+  gates room hiss ahead of the effect chain (grit/reverb amplify it
+  otherwise), with hold + slow release so word tails survive. Threshold
+  adjustable from the menu.
 - **Test - hear myself** self-listen, live mic meter with peak-hold,
   keyboard + mouse + game controller navigation, remappable controls
   (`controls.json`), crash-proof against malformed config.

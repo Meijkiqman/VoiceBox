@@ -132,6 +132,53 @@ check("Normal clears all effects",
       state.reverb == 0 and state.echo == 0 and state.radio is False
       and state.drive == 0)
 
+# --------------------------------------------------------------- noise gate
+g = voicebox.NoiseGate()
+loud = np.full(frames, 0.5, dtype=np.float32)
+hiss = np.full(frames, 0.001, dtype=np.float32)      # -60 dB room noise
+
+for _ in range(8):
+    out_hiss = g.process(hiss, -40.0)
+check("gate stays closed below threshold", np.abs(out_hiss).max() < 1e-4,
+      f"{np.abs(out_hiss).max():.6f}")
+
+out_loud = g.process(loud, -40.0)
+check("gate opens on speech", g.gain > 0.99, f"gain={g.gain:.3f}")
+check("gate ramps the opening block (no click)",
+      abs(out_loud[0]) < abs(out_loud[-1]))
+check("gate keeps float32", out_loud.dtype == np.float32)
+
+blocks_held = 0                                       # hold: tails survive
+while g.process(hiss, -40.0).max() > hiss[0] * 0.9 and blocks_held < 100:
+    blocks_held += 1
+hold_blocks = int(g.hold / (frames / voicebox.SAMPLERATE))
+check("gate holds through short gaps", blocks_held >= hold_blocks,
+      f"{blocks_held} blocks")
+check("gate releases gradually after hold", 0.0 < g.gain < 1.0,
+      f"gain={g.gain:.3f}")
+gains = []
+for _ in range(60):
+    g.process(hiss, -40.0)
+    gains.append(g.gain)
+check("gate release decays monotonically to closed",
+      all(b <= a for a, b in zip(gains, gains[1:])) and gains[-1] < 0.01)
+
+# gate in the callback: mic gated, TTS untouched
+gstate = voicebox.State()
+gcb = voicebox.make_callback(gstate)
+gout = np.zeros((frames, 1), dtype=np.float32)
+with gstate.lock:
+    gstate.gate_on = True
+    gstate.gate_db = -40.0
+hiss_in = np.full((frames, 1), 0.001, dtype=np.float32)
+for _ in range(8):
+    gcb(hiss_in, gout, frames, None, None)
+check("callback gates room noise", np.abs(gout).max() < 1e-4)
+gstate.events.put(("tts", np.full(2400, 0.2, np.float32), True))
+gcb(hiss_in, gout, frames, None, None)
+check("fx TTS bypasses the gate", abs(np.abs(gout).max() - 0.2) < 0.02,
+      f"{np.abs(gout).max():.3f}")
+
 # --------------------------------------------- integration via main callback
 cb = voicebox.make_callback(state)
 out = np.zeros((frames, 1), dtype=np.float32)

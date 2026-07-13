@@ -330,6 +330,38 @@ class BassBoost:
         return x + amount * low.astype(np.float32)
 
 
+class NoiseGate:
+    """Noise gate ahead of the effect chain, so room hiss doesn't feed the
+    grit/reverb stages (which amplify it audibly). Block-level: opens fast
+    when the block peak crosses the threshold, holds briefly so word tails
+    survive, then releases slowly. The gain is ramped across each block so
+    opening/closing never clicks."""
+
+    def __init__(self, sr=SAMPLERATE, attack=0.005, release=0.120, hold=0.150):
+        self.sr = sr
+        self.attack, self.release, self.hold = attack, release, hold
+        self.gain = 0.0                # start closed
+        self.held = 0.0                # seconds of hold left
+
+    def process(self, x, threshold_db):
+        n = len(x)
+        if not n:
+            return x
+        dt = n / self.sr
+        if float(np.abs(x).max()) >= 10.0 ** (threshold_db / 20.0):
+            target, self.held = 1.0, self.hold
+        elif self.held > 0.0:
+            target, self.held = 1.0, self.held - dt
+        else:
+            target = 0.0
+        tc = self.attack if target > self.gain else self.release
+        new_gain = self.gain + (target - self.gain) * min(1.0, dt / max(tc, 1e-6))
+        ramp = np.linspace(self.gain, new_gain, n, endpoint=False,
+                           dtype=np.float32)
+        self.gain = float(new_gain)
+        return x * ramp
+
+
 # ----------------------------------------------------------------------------- STATE
 class State:
     def __init__(self):
@@ -346,6 +378,8 @@ class State:
         self.doubler = 0.0            # helmet doubler wet mix, 0..1
         self.bass = 0.0               # low-shelf boost, 0..1
         self.radio = False            # walkie-talkie band-pass
+        self.gate_on = False          # noise gate ahead of the chain
+        self.gate_db = -40.0          # gate threshold (dBFS block peak)
         self.preset_idx = 0
         self.clips_to_mic = True      # soundboard also feeds the mic channel
         self.clips_paused = False     # freezes all playing sounds (both paths)
@@ -358,6 +392,7 @@ class State:
         self.radio_fx = Radio()
         self.doubler_fx = Doubler()
         self.bass_fx = BassBoost()
+        self.gate_fx = NoiseGate()
         self.clips, self.clip_names = load_clips()
         self.voices = []              # list of [samples, cursor]; audio thread only
         self.tts_voices = []          # list of [samples, cursor, fx]; audio thread only
@@ -451,6 +486,7 @@ def make_callback(state):
             doubler, bass = state.doubler, state.bass
             ai_mute, tts_gain = state.ai_mute, state.tts_gain
             mic_muted = state.mic_muted
+            gate_on, gate_db = state.gate_on, state.gate_db
 
         # apply queued UI events (audio thread owns the shifter and voice list)
         while not state.events.empty():
@@ -494,6 +530,8 @@ def make_callback(state):
                 x = np.zeros(frames, dtype=np.float32)
             else:
                 x = indata[:, 0].astype(np.float32) * voice_gain
+                if gate_on:                # gate the mic only, never the TTS
+                    x = state.gate_fx.process(x, gate_db)
             if tts_pre is not None:
                 x = x + tts_pre * tts_gain
             y = state.shifter.process(x)
@@ -1225,6 +1263,10 @@ class Menu:
                      lambda: "MUTED" if s.mic_muted else "live",
                      select=self.toggle_mute,
                      adjust=lambda d: self.toggle_mute()),
+            MenuItem("Noise gate",
+                     lambda: f"{s.gate_db:.0f} dB" if s.gate_on else "off",
+                     select=self._toggle_gate,
+                     adjust=self._adjust_gate),
             MenuItem("Robot voice",
                      lambda: f"{s.robot:.0%}" if s.robot else "off",
                      select=self._toggle_robot,
@@ -1301,6 +1343,18 @@ class Menu:
     def toggle_mute(self):
         with self.state.lock:
             self.state.mic_muted = not self.state.mic_muted
+
+    def _toggle_gate(self):
+        with self.state.lock:
+            self.state.gate_on = not self.state.gate_on
+
+    def _adjust_gate(self, d):
+        """Threshold in 2 dB steps; adjusting also switches the gate on so
+        the row gives audible feedback while dialing."""
+        with self.state.lock:
+            self.state.gate_on = True
+            self.state.gate_db = max(-70.0, min(-10.0,
+                                                self.state.gate_db + 2.0 * d))
 
     def _toggle_robot(self):
         with self.state.lock:
@@ -1560,6 +1614,7 @@ def run_ui(state, stop_flag, dev_line, err_line="", monitor=None, board=None,
 
     SECTION_OF = {
         "Preset": "VOICE", "Pitch": "VOICE", "Mic": "VOICE",
+        "Noise gate": "VOICE",
         "Robot voice": "EFFECTS", "Helmet doubler": "EFFECTS",
         "Grit / growl": "EFFECTS", "Reverb": "EFFECTS", "Echo": "EFFECTS",
         "Radio voice": "EFFECTS", "Bass boost": "EFFECTS",
