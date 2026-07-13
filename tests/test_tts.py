@@ -95,6 +95,8 @@ with state.lock:
 bank.play(0)
 cb(silent, out, frames, None, None)
 check("clean TTS mixes in post-chain", abs(np.abs(out).max() - 0.2) < 0.01)
+while state.tts_voices:                               # drain before the next check
+    cb(silent, out, frames, None, None)
 
 # TTS volume applies on the mic channel
 with state.lock:
@@ -104,6 +106,8 @@ cb(silent, out, frames, None, None)
 check("TTS volume scales the mix", abs(np.abs(out).max() - 0.1) < 0.01)
 with state.lock:
     state.tts_gain = 1.0
+while state.tts_voices:
+    cb(silent, out, frames, None, None)
 
 # pause freezes, stop clears (same contract as the soundboard)
 bank.play(0)
