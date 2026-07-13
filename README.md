@@ -62,8 +62,11 @@ real mic --> [VoiceBox: pitch/effects/soundboard | or RVC AI voice] --> VB-CABLE
    Also disable Noise Suppression and automatic input sensitivity there,
    or Discord's gate will chop the processed voice.
 
-`python voicebox.py --list` prints audio devices if the auto-match fails;
-device substrings are configured at the top of `voicebox.py`.
+Devices are picked from the DEVICES menu rows (persisted in
+`settings.json`); by default VoiceBox uses the system mic and auto-finds
+the cable. `python voicebox.py --list` prints audio devices if the
+auto-match fails. An RVC package folder can be set with a `"rvc_dir"`
+string in `settings.json` (no source edit needed).
 
 ## Installer
 

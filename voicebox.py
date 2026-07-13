@@ -92,8 +92,10 @@ SAMPLERATE = 48000        # VB-CABLE runs at 48k by default
 BLOCKSIZE  = 512          # smaller = lower latency, larger = safer. 256-1024 typical
 CHANNELS   = 1            # mono processing path
 
-# Device selection. Substrings are matched against device names (case-insensitive).
-# Use --list to see names. Set to an int to force a specific device index instead.
+# Device selection fallbacks. The DEVICES menu rows are the normal way to pick
+# devices (persisted in settings.json); these constants only apply when nothing
+# is selected there. Substrings are matched against device names
+# (case-insensitive); use --list to see names, or set an int to force an index.
 INPUT_DEVICE_MATCH   = None            # None = system default mic, or e.g. "Microphone"
 OUTPUT_DEVICE_MATCH  = "CABLE Input"   # the virtual cable's INPUT side
 
@@ -102,8 +104,9 @@ MAX_CLIPS   = 64           # how many files from ./sounds get indexed
 
 # AI voice (RVC) integration. Point RVC_DIR at an extracted RVC-beta package
 # (must contain runtime\python.exe, weights\*.pth, hubert_base.pt, rmvpe.pt).
-# The AI rows only appear in the menu when this folder and at least one voice
-# model exist, so machines without RVC are unaffected.
+# A "rvc_dir" string in settings.json overrides this constant. The AI rows
+# only appear in the menu when the folder and at least one voice model exist,
+# so machines without RVC are unaffected.
 RVC_DIR = Path(r"H:\Python_Projects\DeepSpeech"
                r"\Retrieval-based-Voice-Conversion-WebUI-main\RVC-beta0717")
 
@@ -383,6 +386,11 @@ PERSIST_FIELDS = {
     "gate_on":      bool,
     "tts_fx":       bool,
     "clips_to_mic": bool,
+    # str = device/path name or None (None -> the defaults at the top of
+    # this file). Persisting names, not indexes: indexes shift across boots.
+    "input_device":  str,
+    "output_device": str,
+    "rvc_dir":       str,
 }
 
 
@@ -451,6 +459,9 @@ class State:
         self.tts_fx = True            # TTS through the voice chain / AI (off = clean)
         self.tts_gain = 1.0           # TTS level on the mic channel
         self.ai_mute = False          # AI worker owns the voice; mute ours
+        self.input_device = None      # device name; None = INPUT_DEVICE_MATCH
+        self.output_device = None     # device name; None = OUTPUT_DEVICE_MATCH
+        self.rvc_dir = None           # RVC package path; None = RVC_DIR
         self.shifter = StreamingPitchShifter(SAMPLERATE, 0.0)  # audio thread only
         self.reverb_fx = Reverb()     # effect state: audio thread only
         self.echo_fx = Echo()
@@ -552,6 +563,9 @@ class State:
                 v = data[key]
                 if spec is bool:
                     setattr(self, key, bool(v))
+                    continue
+                if spec is str:
+                    setattr(self, key, v if isinstance(v, str) and v else None)
                     continue
                 try:
                     v = float(v)
@@ -727,6 +741,113 @@ def make_callback(state):
     return callback
 
 
+class AudioEngine:
+    """Owns the main mic -> cable stream and the device choice, so devices
+    can be switched from the menu at runtime instead of editing constants.
+    Selection persists by device NAME (settings.json); None means the
+    defaults at the top of this file. A saved device that has vanished
+    (unplugged, cable uninstalled) falls back to the default with a status
+    note instead of breaking startup."""
+
+    def __init__(self, state):
+        self.state = state
+        self.stream = None
+        self.error = ""
+        self.dev_line = ""
+        self.in_name = "default mic"   # resolved names for the UI
+        self.out_name = "default out"
+
+    def _report(self, msg):
+        self.state.status_msg = msg
+        self.state.status_at = time.time()
+
+    def _resolve(self, kind):
+        saved = (self.state.input_device if kind == "input"
+                 else self.state.output_device)
+        if saved:
+            try:
+                return find_device(saved, kind)
+            except SystemExit:
+                with self.state.lock:      # don't keep persisting a dead choice
+                    setattr(self.state, kind + "_device", None)
+                self._report(f"{kind} device '{saved[:40]}' not found - using default")
+        fallback = INPUT_DEVICE_MATCH if kind == "input" else OUTPUT_DEVICE_MATCH
+        return find_device(fallback, kind)
+
+    def open(self):
+        """(Re)open the stream on the currently selected devices."""
+        self.close()
+        try:
+            in_dev = self._resolve("input")
+            out_dev = self._resolve("output")
+            self.in_name = (sd.query_devices(in_dev)["name"]
+                            if in_dev is not None else "default mic")
+            self.out_name = (sd.query_devices(out_dev)["name"]
+                             if out_dev is not None else "default out")
+            self.dev_line = (f"{self.in_name}  ->  {self.out_name}"
+                             "   (Discord input: CABLE Output)")
+            # latency="high" buys buffering headroom: Python-side hiccups (GC,
+            # UI thread holding the GIL) then cause no dropouts. Adds ~20 ms -
+            # fine for voice chat, and far better than cutting out.
+            stream = sd.Stream(samplerate=SAMPLERATE, blocksize=BLOCKSIZE,
+                               dtype="float32", channels=CHANNELS,
+                               device=(in_dev, out_dev), latency="high",
+                               callback=make_callback(self.state))
+            stream.start()
+            self.stream = stream
+            self.error = ""
+            return True
+        except (SystemExit, Exception) as e:
+            self.stream = None
+            self.dev_line = ""
+            self.error = f"audio unavailable: {e}"
+            return False
+
+    def close(self):
+        if self.stream is not None:
+            try:
+                self.stream.close()
+            except Exception:
+                pass
+            self.stream = None
+
+    def options(self, kind):
+        """[None, name, name, ...]: None is the "default" entry."""
+        key = ("max_input_channels" if kind == "input"
+               else "max_output_channels")
+        try:
+            names = [d["name"] for d in sd.query_devices() if d[key] > 0]
+        except Exception:
+            names = []
+        return [None] + names
+
+    def short_name(self, kind, width=24):
+        name = self.in_name if kind == "input" else self.out_name
+        saved = (self.state.input_device if kind == "input"
+                 else self.state.output_device)
+        if saved is None:
+            name = "default" if kind == "input" else f"auto ({name[:14]})"
+        return name if len(name) <= width else name[:width - 3] + "..."
+
+    def cycle(self, kind, d):
+        """Step through available devices (wrapping through "default") and
+        reopen the stream on the new choice."""
+        opts = self.options(kind)
+        if len(opts) < 2:
+            return
+        saved = (self.state.input_device if kind == "input"
+                 else self.state.output_device)
+        try:
+            i = opts.index(saved)
+        except ValueError:                 # saved device vanished mid-session
+            i = 0
+        choice = opts[(i + (1 if d >= 0 else -1)) % len(opts)]
+        with self.state.lock:
+            setattr(self.state, kind + "_device", choice)
+        if not self.open():
+            self._report(self.error)
+
+
 class Monitor:
     """Self-listen ("Test - hear myself"). While the main stream is running it
     mirrors the processed mix to the default speakers. If the main stream never
@@ -735,9 +856,12 @@ class Monitor:
 
     def __init__(self, state, has_main_stream):
         self.state = state
-        self.has_main = has_main_stream
+        self.has_main = has_main_stream        # bool, or callable for live state
         self.stream = None
         self.error = ""
+
+    def _main_up(self):
+        return self.has_main() if callable(self.has_main) else self.has_main
 
     @property
     def on(self):
@@ -751,11 +875,11 @@ class Monitor:
             except Exception:
                 pass
             self.stream = None
-            if not self.has_main:              # fallback stream fed the meter
+            if not self._main_up():            # fallback stream fed the meter
                 self.state.in_level = 0.0
             return
         try:
-            if self.has_main:
+            if self._main_up():
                 q = queue.Queue(maxsize=8)     # ~85 ms of audio; producer drops extras
 
                 def cb(outdata, frames, time_info, status):
@@ -928,6 +1052,7 @@ class AiVoice:
 
     def __init__(self, state, rvc_dir=None):
         self.state = state
+        rvc_dir = rvc_dir or getattr(state, "rvc_dir", None)
         self.rvc_dir = Path(rvc_dir) if rvc_dir else RVC_DIR
         self.proc = None
         self.status = "off"                # off | loading... | ON | error
@@ -993,14 +1118,18 @@ class AiVoice:
         if self.proc is not None or not self.voices:
             return
         pth = self.voices[self.sel]
+        # the worker opens its own streams: hand it the same devices the
+        # main stream uses (menu selection first, constants as fallback)
+        out_match = self.state.output_device or OUTPUT_DEVICE_MATCH
+        in_match = self.state.input_device or INPUT_DEVICE_MATCH
         cmd = [str(self.rvc_dir / "runtime" / "python.exe"),
                str(BASE_DIR / "rvc_worker.py"),
-               "--pth", str(pth), "--output-device", OUTPUT_DEVICE_MATCH]
+               "--pth", str(pth), "--output-device", str(out_match)]
         index = self._index_for(pth)
         if index:
             cmd += ["--index", index]
-        if isinstance(INPUT_DEVICE_MATCH, str) and INPUT_DEVICE_MATCH:
-            cmd += ["--input-device", INPUT_DEVICE_MATCH]
+        if isinstance(in_match, str) and in_match:
+            cmd += ["--input-device", in_match]
         try:
             self.proc = subprocess.Popen(
                 cmd, cwd=str(self.rvc_dir), text=True,
@@ -1371,13 +1500,14 @@ class Menu:
     controller uses, so behavior is identical across input devices."""
 
     def __init__(self, state, stop_flag, monitor=None, board=None, ai=None,
-                 hotkeys=None):
+                 hotkeys=None, engine=None):
         self.state = state
         self.stop_flag = stop_flag
         self.monitor = monitor
         self.board = board if board is not None else Board(state)
         self.ai = ai
         self.hotkeys = hotkeys
+        self.engine = engine
         self.sel = 0
         self.flash = {}               # item index -> flash-until timestamp
         s = state
@@ -1461,6 +1591,17 @@ class Menu:
                 lambda: "ON" if hotkeys.on else "off",
                 select=hotkeys.toggle,
                 adjust=lambda d: hotkeys.toggle()))
+        if engine is not None:
+            self.items.append(MenuItem(
+                "Input device",
+                lambda: engine.short_name("input"),
+                select=lambda: engine.cycle("input", +1),
+                adjust=lambda d: engine.cycle("input", d)))
+            self.items.append(MenuItem(
+                "Output device",
+                lambda: engine.short_name("output"),
+                select=lambda: engine.cycle("output", +1),
+                adjust=lambda d: engine.cycle("output", d)))
         b = self.board
         self.items.append(MenuItem("Sounds to mic",
                                    lambda: "ON" if s.clips_to_mic else "off",
@@ -1536,7 +1677,7 @@ class Menu:
 
 
 def run_ui(state, stop_flag, dev_line, err_line="", monitor=None, board=None,
-           ai=None, tts=None, hotkeys=None):
+           ai=None, tts=None, hotkeys=None, engine=None):
     """VoiceBox skin, ported from design/VoiceBox Skin.dc.html.
 
     Faithful to the tokens JSON + motion spec in that file: Space Grotesk for
@@ -1636,7 +1777,7 @@ def run_ui(state, stop_flag, dev_line, err_line="", monitor=None, board=None,
     f_strip = _font("JetBrainsMono-Bold.ttf", 11, "consolas", True)
     f_foot = _font("JetBrainsMono-Medium.ttf", 11, "consolas")
 
-    menu = Menu(state, stop_flag, monitor, board, ai, hotkeys)
+    menu = Menu(state, stop_flag, monitor, board, ai, hotkeys, engine)
     board = menu.board
     if tts is None:
         tts = TTSBank(state, getattr(board, "player", None), monitor, ai)
@@ -1762,6 +1903,7 @@ def run_ui(state, stop_flag, dev_line, err_line="", monitor=None, board=None,
         "Sounds to mic": "SOUNDS", "Pause sounds": "SOUNDS",
         "Stop all sounds": "SOUNDS",
         "Test - hear myself": "SYSTEM", "Global hotkeys": "SYSTEM",
+        "Input device": "DEVICES", "Output device": "DEVICES",
         "Quit": "SYSTEM",
     }
     layout, row_pos = [], {}
@@ -2562,17 +2704,21 @@ def run_ui(state, stop_flag, dev_line, err_line="", monitor=None, board=None,
         pygame.draw.line(screen, CLR["strokeSoft"], (0, VIEW_BOT),
                          (WINDOW_SIZE[0], VIEW_BOT))
         fy = VIEW_BOT + FOOTER_H // 2
-        if err_line:
-            es = T(f_foot, err_line, CLR["danger"])
+        # live values: the engine's device line changes when devices are
+        # switched from the menu
+        cur_err = engine.error if engine is not None else err_line
+        cur_dev = engine.dev_line if engine is not None else dev_line
+        if cur_err:
+            es = T(f_foot, cur_err, CLR["danger"])
             screen.blit(es, (14, fy - es.get_height() // 2))
-        elif dev_line:
+        elif cur_dev:
             fx = 14
-            if "->" in dev_line:
-                a_, b_ = dev_line.split("->", 1)
+            if "->" in cur_dev:
+                a_, b_ = cur_dev.split("->", 1)
                 parts = ((a_.strip(), CLR["muted"]), (" → ", CLR["accent"]),
                          (b_.strip(), CLR["muted"]))
             else:
-                parts = ((dev_line, CLR["muted"]),)
+                parts = ((cur_dev, CLR["muted"]),)
             for ptxt, pcol in parts:
                 psur = T(f_foot, ptxt, pcol)
                 screen.blit(psur, (fx, fy - psur.get_height() // 2))
@@ -2640,25 +2786,11 @@ def main():
     state = State()
     state.restore(load_settings())
     stop_flag = threading.Event()
-    err_line = ""
-    try:
-        in_dev = find_device(INPUT_DEVICE_MATCH, "input")
-        out_dev = find_device(OUTPUT_DEVICE_MATCH, "output")
-        in_name = sd.query_devices(in_dev)["name"] if in_dev is not None else "default mic"
-        out_name = sd.query_devices(out_dev)["name"] if out_dev is not None else "default out"
-        dev_line = f"{in_name}  ->  {out_name}   (Discord input: CABLE Output)"
-        # latency="high" buys buffering headroom: Python-side hiccups (GC, UI
-        # thread holding the GIL) then cause no dropouts. Adds ~20 ms - fine
-        # for voice chat, and far better than cutting out.
-        stream = sd.Stream(samplerate=SAMPLERATE, blocksize=BLOCKSIZE, dtype="float32",
-                           channels=CHANNELS, device=(in_dev, out_dev),
-                           latency="high", callback=make_callback(state))
-    except (SystemExit, Exception) as e:      # UI still opens so the error is visible
-        dev_line = ""
-        err_line = f"audio unavailable: {e}"
-        stream = None
+    engine = AudioEngine(state)
+    engine.open()                 # failure lands in engine.error; UI still opens
 
-    monitor = Monitor(state, has_main_stream=stream is not None)
+    monitor = Monitor(state,
+                      has_main_stream=lambda: engine.stream is not None)
     player = LocalPlayer(state)
     board = Board(state, player, monitor)
     ai = AiVoice(state)
@@ -2668,13 +2800,8 @@ def main():
     threading.Thread(target=settings_autosave, args=(state, stop_flag),
                      daemon=True).start()
     try:
-        if stream:
-            with stream:
-                run_ui(state, stop_flag, dev_line, err_line, monitor, board,
-                       ai, tts, hotkeys)
-        else:
-            run_ui(state, stop_flag, dev_line, err_line, monitor, board,
-                   ai, tts, hotkeys)
+        run_ui(state, stop_flag, engine.dev_line, engine.error, monitor,
+               board, ai, tts, hotkeys, engine)
     except KeyboardInterrupt:
         pass
     finally:
@@ -2683,6 +2810,7 @@ def main():
         ai.stop()
         monitor.close()
         player.close()
+        engine.close()
     print("stopped.")
 
 
