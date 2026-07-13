@@ -81,6 +81,8 @@ from scipy.signal import butter, lfilter, resample_poly
 BASE_DIR      = Path(__file__).resolve().parent
 SOUNDS_DIR    = BASE_DIR / "sounds"       # anchored: works from any cwd
 CONTROLS_PATH = BASE_DIR / "controls.json"
+SETTINGS_PATH = BASE_DIR / "settings.json"       # dialed-in values, restored on launch
+USER_PRESETS_PATH = BASE_DIR / "user_presets.json"  # "Save preset" snapshots
 
 TTS_PHRASES_PATH = BASE_DIR / "tts_phrases.json"  # saved TTS phrases
 TTS_CACHE_DIR    = BASE_DIR / "tts_cache"         # rendered wavs, keyed by text hash
@@ -363,6 +365,69 @@ class NoiseGate:
 
 
 # ----------------------------------------------------------------------------- STATE
+# What survives a restart (settings.json). Ranges clamp hand-edited files.
+PERSIST_FIELDS = {
+    # name: (lo, hi) for numbers, bool for toggles
+    "semitones":    (-12.0, 12.0),
+    "robot":        (0.0, 1.0),
+    "drive":        (0.0, 1.0),
+    "reverb":       (0.0, 1.0),
+    "echo":         (0.0, 1.0),
+    "doubler":      (0.0, 1.0),
+    "bass":         (0.0, 1.0),
+    "voice_gain":   (0.0, 1.5),
+    "clip_gain":    (0.0, 1.5),
+    "tts_gain":     (0.0, 1.5),
+    "gate_db":      (-70.0, -10.0),
+    "radio":        bool,
+    "gate_on":      bool,
+    "tts_fx":       bool,
+    "clips_to_mic": bool,
+}
+
+
+def load_settings(path=SETTINGS_PATH):
+    """settings.json -> dict; missing/broken file -> {} (defaults win)."""
+    try:
+        data = json.loads(Path(path).read_text(encoding="utf-8"))
+        return data if isinstance(data, dict) else {}
+    except (OSError, json.JSONDecodeError):
+        return {}
+
+
+def save_settings(data, path=SETTINGS_PATH):
+    try:
+        Path(path).write_text(json.dumps(data, indent=2), encoding="utf-8")
+    except OSError:
+        pass                                   # read-only install dir: run on
+
+
+def load_user_presets(path=USER_PRESETS_PATH):
+    """user_presets.json -> [(name, params)] in PRESETS shape; bad entries
+    are dropped so a hand-edited file can't break startup."""
+    try:
+        data = json.loads(Path(path).read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return []
+    out = []
+    if isinstance(data, list):
+        for entry in data:
+            if (isinstance(entry, dict) and isinstance(entry.get("name"), str)
+                    and isinstance(entry.get("params"), dict)):
+                out.append((entry["name"][:40], entry["params"]))
+    return out
+
+
+def save_user_presets(presets, path=USER_PRESETS_PATH):
+    try:
+        Path(path).write_text(
+            json.dumps([{"name": n, "params": p} for n, p in presets],
+                       indent=2),
+            encoding="utf-8")
+    except OSError:
+        pass
+
+
 class State:
     def __init__(self):
         self.lock = threading.Lock()
@@ -393,6 +458,8 @@ class State:
         self.doubler_fx = Doubler()
         self.bass_fx = BassBoost()
         self.gate_fx = NoiseGate()
+        self.user_presets_path = USER_PRESETS_PATH
+        self.user_presets = load_user_presets(USER_PRESETS_PATH)
         self.clips, self.clip_names = load_clips()
         self.voices = []              # list of [samples, cursor]; audio thread only
         self.tts_voices = []          # list of [samples, cursor, fx]; audio thread only
@@ -414,31 +481,95 @@ class State:
         with self.lock:
             setattr(self, attr, max(lo, min(hi, getattr(self, attr) + delta)))
 
+    def presets_all(self):
+        """Built-in presets followed by the user's saved ones."""
+        return PRESETS + self.user_presets
+
     def apply_preset(self, idx):
-        _, p = PRESETS[idx % len(PRESETS)]
+        presets = self.presets_all()
+        _, p = presets[idx % len(presets)]
         with self.lock:
-            self.preset_idx = idx % len(PRESETS)
-            self.robot = float(p["robot"])
-            self.drive = p["drive"]
-            self.reverb = p.get("reverb", 0.0)
-            self.echo = p.get("echo", 0.0)
-            self.doubler = p.get("doubler", 0.0)
-            self.bass = p.get("bass", 0.0)
-            self.radio = p.get("radio", False)
-        self.set_pitch(p["semitones"])
+            self.preset_idx = idx % len(presets)
+            # .get throughout: user_presets.json is hand-editable
+            self.robot = float(p.get("robot", 0.0))
+            self.drive = float(p.get("drive", 0.0))
+            self.reverb = float(p.get("reverb", 0.0))
+            self.echo = float(p.get("echo", 0.0))
+            self.doubler = float(p.get("doubler", 0.0))
+            self.bass = float(p.get("bass", 0.0))
+            self.radio = bool(p.get("radio", False))
+        self.set_pitch(p.get("semitones", 0))
 
     def preset_label(self):
         """Preset name while values still match it, else "Custom"."""
-        name, p = PRESETS[self.preset_idx]
-        matches = (self.semitones == p["semitones"]
-                   and self.robot == float(p["robot"])
-                   and self.drive == p["drive"]
+        presets = self.presets_all()
+        name, p = presets[self.preset_idx % len(presets)]
+        matches = (self.semitones == p.get("semitones", 0)
+                   and self.robot == float(p.get("robot", 0.0))
+                   and self.drive == p.get("drive", 0.0)
                    and self.reverb == p.get("reverb", 0.0)
                    and self.echo == p.get("echo", 0.0)
                    and self.doubler == p.get("doubler", 0.0)
                    and self.bass == p.get("bass", 0.0)
                    and self.radio == p.get("radio", False))
         return name if matches else "Custom"
+
+    def save_user_preset(self):
+        """Snapshot the current dialing as a named user preset, select it,
+        and persist it. Returns the generated name."""
+        with self.lock:
+            params = {"semitones": self.semitones, "robot": self.robot,
+                      "drive": self.drive, "reverb": self.reverb,
+                      "echo": self.echo, "doubler": self.doubler,
+                      "bass": self.bass, "radio": self.radio}
+            taken = {n for n, _ in PRESETS} | {n for n, _ in self.user_presets}
+            i = len(self.user_presets) + 1
+            while f"My preset {i}" in taken:
+                i += 1
+            name = f"My preset {i}"
+            self.user_presets.append((name, params))
+            self.preset_idx = len(PRESETS) + len(self.user_presets) - 1
+        save_user_presets(self.user_presets, self.user_presets_path)
+        return name
+
+    def snapshot(self):
+        """Persisted values -> plain dict (see PERSIST_FIELDS)."""
+        with self.lock:
+            data = {k: getattr(self, k) for k in PERSIST_FIELDS}
+            data["preset_idx"] = self.preset_idx
+        return data
+
+    def restore(self, data):
+        """Apply a settings dict; wrong types/ranges fall back to defaults
+        so a hand-edited settings.json can't break startup."""
+        if not isinstance(data, dict):
+            return
+        semis = None
+        with self.lock:
+            for key, spec in PERSIST_FIELDS.items():
+                if key not in data:
+                    continue
+                v = data[key]
+                if spec is bool:
+                    setattr(self, key, bool(v))
+                    continue
+                try:
+                    v = float(v)
+                except (TypeError, ValueError):
+                    continue
+                lo, hi = spec
+                v = max(lo, min(hi, v))
+                if key == "semitones":
+                    semis = v          # via set_pitch below (feeds the shifter)
+                else:
+                    setattr(self, key, v)
+            try:
+                idx = int(data.get("preset_idx", self.preset_idx))
+            except (TypeError, ValueError):
+                idx = self.preset_idx
+            self.preset_idx = idx % len(self.presets_all())
+        if semis is not None:
+            self.set_pitch(semis)
 
 
 def load_clips():
@@ -1255,6 +1386,8 @@ class Menu:
                      lambda: s.preset_label(),
                      select=lambda: s.apply_preset(s.preset_idx),
                      adjust=lambda d: s.apply_preset(s.preset_idx + d)),
+            MenuItem("Save preset",
+                     select=self._save_preset),
             MenuItem("Pitch",
                      lambda: f"{s.semitones:+.0f} st" if s.semitones else "off",
                      select=lambda: s.set_pitch(0),
@@ -1343,6 +1476,11 @@ class Menu:
     def toggle_mute(self):
         with self.state.lock:
             self.state.mic_muted = not self.state.mic_muted
+
+    def _save_preset(self):
+        name = self.state.save_user_preset()
+        self.state.status_msg = f"saved \"{name}\" (edit user_presets.json to rename)"
+        self.state.status_at = time.time()
 
     def _toggle_gate(self):
         with self.state.lock:
@@ -1613,8 +1751,8 @@ def run_ui(state, stop_flag, dev_line, err_line="", monitor=None, board=None,
                             TTS_TOP - GRID_TOP)
 
     SECTION_OF = {
-        "Preset": "VOICE", "Pitch": "VOICE", "Mic": "VOICE",
-        "Noise gate": "VOICE",
+        "Preset": "VOICE", "Save preset": "VOICE", "Pitch": "VOICE",
+        "Mic": "VOICE", "Noise gate": "VOICE",
         "Robot voice": "EFFECTS", "Helmet doubler": "EFFECTS",
         "Grit / growl": "EFFECTS", "Reverb": "EFFECTS", "Echo": "EFFECTS",
         "Radio voice": "EFFECTS", "Bass boost": "EFFECTS",
@@ -2481,6 +2619,17 @@ def find_device(match, kind):
 
 
 # ----------------------------------------------------------------------------- MAIN
+def settings_autosave(state, stop_flag, path=SETTINGS_PATH, interval=2.0):
+    """Persist changed settings every couple of seconds (daemon thread), so
+    a crash or power cut loses at most one interval of dialing."""
+    last = state.snapshot()
+    while not stop_flag.wait(interval):
+        snap = state.snapshot()
+        if snap != last:
+            save_settings(snap, path)
+            last = snap
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--list", action="store_true", help="list audio devices and exit")
@@ -2489,6 +2638,7 @@ def main():
         print(sd.query_devices()); return
 
     state = State()
+    state.restore(load_settings())
     stop_flag = threading.Event()
     err_line = ""
     try:
@@ -2515,6 +2665,8 @@ def main():
     tts = TTSBank(state, player, monitor, ai)
     tts.warm()                    # synthesize saved phrases in the background
     hotkeys = GlobalHotkeys(state, board)
+    threading.Thread(target=settings_autosave, args=(state, stop_flag),
+                     daemon=True).start()
     try:
         if stream:
             with stream:
@@ -2526,6 +2678,7 @@ def main():
     except KeyboardInterrupt:
         pass
     finally:
+        save_settings(state.snapshot())
         hotkeys.close()
         ai.stop()
         monitor.close()

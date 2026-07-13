@@ -113,7 +113,7 @@ stop_flag = threading.Event()
 menu = voicebox.Menu(state, stop_flag, voicebox.Monitor(state, True))
 labels = [it.label for it in menu.items]
 check("settings rows in order",
-      labels == ["Preset", "Pitch", "Mic", "Noise gate",
+      labels == ["Preset", "Save preset", "Pitch", "Mic", "Noise gate",
                  "Robot voice", "Helmet doubler",
                  "Grit / growl", "Reverb", "Echo", "Radio voice", "Bass boost",
                  "Voice volume", "Clip volume", "TTS voice FX", "TTS volume",

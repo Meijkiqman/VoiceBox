@@ -16,6 +16,11 @@ real mic --> [VoiceBox: pitch/effects/soundboard | or RVC AI voice] --> VB-CABLE
 - **Presets** - Space Marine, Ghost, Robot, Chipmunk, Monster, Ork,
   Walkie-Talkie; every ingredient is also a manual row (pitch, robot/vocoder
   mix, helmet doubler, grit, reverb, echo, radio band-pass, bass boost).
+  "Save preset" snapshots your current dialing as a user preset
+  (`user_presets.json` - edit it to rename) that joins the cycle.
+- **Settings persist** - every slider, toggle and the chosen preset are
+  saved to `settings.json` (autosaved while running) and restored on the
+  next launch.
 - **Soundboard** - drop audio files (wav/flac/ogg/mp3) into `sounds/`; each
   becomes a grid tile. Keys 1-9 fire the first nine. You always hear sounds
   locally; the "To mic" toggle decides whether Discord hears them too.
@@ -83,6 +88,8 @@ voicebox.py       the app: audio engine, effects, soundboard, UI (pygame)
 rvc_worker.py     headless RVC realtime worker (runs on RVC's runtime python)
 VoiceBox.bat      run-from-source launcher (auto-installs deps)
 controls.json     input bindings (delete to restore defaults)
+settings.json     your dialed-in values, restored on launch (not committed)
+user_presets.json your saved presets (not committed)
 sounds/           your soundboard clips (not committed)
 tts_phrases.json  your saved TTS phrases (not committed)
 tts_cache/        rendered TTS audio, rebuilt on demand (not committed)
