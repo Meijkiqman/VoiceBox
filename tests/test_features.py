@@ -118,7 +118,7 @@ check("settings rows in order",
                  "Grit / growl", "Reverb", "Echo", "Radio voice", "Bass boost",
                  "Voice volume", "Clip volume", "TTS voice FX", "TTS volume",
                  "Test - hear myself", "Sounds to mic", "Pause sounds",
-                 "Stop all sounds", "Quit"],
+                 "Stop all sounds", "Rescan sounds", "Quit"],
       str(labels))
 menu_nomon = voicebox.Menu(state, stop_flag)
 check("Menu without monitor omits Test row",

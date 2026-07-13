@@ -138,6 +138,8 @@ DEFAULT_CONTROLS = {
         "back":       ["escape"],
         "stop_clips": ["0", "backspace"],
         "mute":       ["m"],
+        "page_next":  ["tab", "]"],
+        "page_prev":  ["["],
         "clips":      ["1", "2", "3", "4", "5", "6", "7", "8", "9"],
     },
     "gamepad": {
@@ -472,6 +474,8 @@ class State:
         self.user_presets_path = USER_PRESETS_PATH
         self.user_presets = load_user_presets(USER_PRESETS_PATH)
         self.clips, self.clip_names = load_clips()
+        self.clips_version = 0        # bumped on rescan; UI rebuilds its caches
+        self.clip_page = 0            # hotkeys 1-9 fire page*9 .. page*9+8
         self.voices = []              # list of [samples, cursor]; audio thread only
         self.tts_voices = []          # list of [samples, cursor, fx]; audio thread only
         self.events = queue.Queue()   # UI thread -> audio thread
@@ -1028,6 +1032,35 @@ class Board:
                 self.state.status_at = time.time()
         self.flash[i] = time.time() + 0.25
 
+    def play_hot(self, slot):
+        """Hotkey slot 0-8 -> clip on the current page."""
+        self.play(slot + 9 * self.state.clip_page)
+
+    def page_count(self):
+        return max(1, (len(self.state.clips) + 8) // 9)
+
+    def set_page(self, d):
+        """Step the hotkey page (wraps). Returns the new page."""
+        n = self.page_count()
+        with self.state.lock:
+            self.state.clip_page = (self.state.clip_page + d) % n
+        return self.state.clip_page
+
+    def rescan(self):
+        """Re-read sounds/ without a restart. Playing clips keep their old
+        samples (the voice lists hold references); the swap is a whole-list
+        assignment so the audio callback sees either the old or new list."""
+        clips, names = load_clips()
+        with self.state.lock:
+            self.state.clips = clips
+            self.state.clip_names = names
+            self.state.clip_page = min(self.state.clip_page,
+                                       self.page_count() - 1)
+            self.state.clips_version += 1
+        self.flash.clear()
+        self.state.status_msg = f"soundboard: {len(clips)} sound(s)"
+        self.state.status_at = time.time()
+
     def toggle_mic(self):
         with self.state.lock:
             self.state.clips_to_mic = not self.state.clips_to_mic
@@ -1387,7 +1420,8 @@ class GlobalHotkeys:
         if isinstance(clips, list):
             for i, combo in enumerate(clips):
                 if combo:
-                    out.append((str(combo), lambda i=i: self.board.play(i)))
+                    out.append((str(combo),
+                                lambda i=i: self.board.play_hot(i)))
         if self.cfg.get("stop_clips"):
             out.append((str(self.cfg["stop_clips"]), self.board.stop))
         if self.cfg.get("next_preset"):
@@ -1612,6 +1646,7 @@ class Menu:
                                    select=b.toggle_pause,
                                    adjust=lambda d: b.toggle_pause()))
         self.items.append(MenuItem("Stop all sounds", select=b.stop))
+        self.items.append(MenuItem("Rescan sounds", select=b.rescan))
         self.items.append(MenuItem("Quit", select=self.stop_flag.set, flash=False))
 
     def toggle_mute(self):
@@ -1901,7 +1936,7 @@ def run_ui(state, stop_flag, dev_line, err_line="", monitor=None, board=None,
         "AI voice": "AI", "AI character": "AI",
         "TTS voice FX": "TTS", "TTS volume": "TTS",
         "Sounds to mic": "SOUNDS", "Pause sounds": "SOUNDS",
-        "Stop all sounds": "SOUNDS",
+        "Stop all sounds": "SOUNDS", "Rescan sounds": "SOUNDS",
         "Test - hear myself": "SYSTEM", "Global hotkeys": "SYSTEM",
         "Input device": "DEVICES", "Output device": "DEVICES",
         "Quit": "SYSTEM",
@@ -1920,21 +1955,31 @@ def run_ui(state, stop_flag, dev_line, err_line="", monitor=None, board=None,
         y_acc += ROW_HGT + ROW_GAP
     content_h = y_acc + 20
 
-    grid_rows = (len(state.clips) + COLS - 1) // COLS
-    grid_content_h = (grid_rows * (TILE_H + GGAP) - GGAP + 20) if state.clips else 0
-    clip_by_id = {id(c): i for i, c in enumerate(state.clips)}
+    grid_rows, grid_content_h, clips_seen = 0, 0, -1
+    clip_by_id, disp_names, clip_secs = {}, [], []
 
-    # grid labels never change at runtime: truncate + measure them once
-    disp_names, clip_secs = [], []
-    name_max = TILE_W - 20 - 22
-    for nm, c in zip(state.clip_names, state.clips):
-        if f_tile.render(nm, True, CLR["text"]).get_width() > name_max:
-            while nm and f_tile.render(nm + "...", True,
-                                       CLR["text"]).get_width() > name_max:
-                nm = nm[:-1]
-            nm += "..."
-        disp_names.append(nm)
-        clip_secs.append(f"{len(c) / SAMPLERATE:.1f}s")
+    def rebuild_grid():
+        """Grid caches (truncated labels, sizes). Rebuilt after each rescan,
+        so labels only re-measure when the clip list actually changed."""
+        nonlocal grid_rows, grid_content_h, clips_seen
+        clips_seen = state.clips_version
+        grid_rows = (len(state.clips) + COLS - 1) // COLS
+        grid_content_h = (grid_rows * (TILE_H + GGAP) - GGAP + 20
+                          if state.clips else 0)
+        clip_by_id.clear()
+        clip_by_id.update({id(c): i for i, c in enumerate(state.clips)})
+        disp_names.clear()
+        clip_secs.clear()
+        name_max = TILE_W - 20 - 22
+        for nm, c in zip(state.clip_names, state.clips):
+            if f_tile.render(nm, True, CLR["text"]).get_width() > name_max:
+                while nm and f_tile.render(nm + "...", True,
+                                           CLR["text"]).get_width() > name_max:
+                    nm = nm[:-1]
+                nm += "..."
+            disp_names.append(nm)
+            clip_secs.append(f"{len(c) / SAMPLERATE:.1f}s")
+    rebuild_grid()
 
     # ----------------------------------------------------------- motion state
     list_scroll = list_target = 0.0
@@ -1996,6 +2041,12 @@ def run_ui(state, stop_flag, dev_line, err_line="", monitor=None, board=None,
             (pygame.key.start_text_input if on else pygame.key.stop_text_input)()
         except Exception:
             pass
+
+    def flip_page(d):
+        """Step the hotkey page and scroll the grid to show it."""
+        nonlocal grid_target
+        page = board.set_page(d)
+        grid_target = (page * 9 // COLS) * (TILE_H + GGAP)
 
     def go_left():
         menu.on_left()
@@ -2091,6 +2142,9 @@ def run_ui(state, stop_flag, dev_line, err_line="", monitor=None, board=None,
         dt = min(0.1, now - last_t)
         last_t = now
 
+        if state.clips_version != clips_seen:      # rescan happened
+            rebuild_grid()
+
         for event in pygame.event.get():
             if event.type == pygame.QUIT:
                 stop_flag.set()
@@ -2120,8 +2174,8 @@ def run_ui(state, stop_flag, dev_line, err_line="", monitor=None, board=None,
                 repeat = event.key in held_keys
                 held_keys.add(event.key)
                 if event.key in clipmap:
-                    if not repeat and clipmap[event.key] < len(state.clips):
-                        menu.play_clip(clipmap[event.key])
+                    if not repeat:                 # page-relative; play() bounds-checks
+                        board.play_hot(clipmap[event.key])
                     continue
                 act = key_action(event.key)
                 if   act == "up":         menu.on_up()
@@ -2133,6 +2187,8 @@ def run_ui(state, stop_flag, dev_line, err_line="", monitor=None, board=None,
                 elif act == "back":       menu.on_back()
                 elif act == "stop_clips": board.stop()
                 elif act == "mute":       menu.toggle_mute()
+                elif act == "page_next":  flip_page(+1)
+                elif act == "page_prev":  flip_page(-1)
 
             elif event.type == pygame.KEYUP:
                 held_keys.discard(event.key)
@@ -2167,6 +2223,8 @@ def run_ui(state, stop_flag, dev_line, err_line="", monitor=None, board=None,
                     board.toggle_pause()
                 elif hit == "stop":
                     board.stop()
+                elif hit == "page":
+                    flip_page(+1)
                 elif (r := tts_btn_hit.get("add")) is not None \
                         and r.collidepoint(event.pos):
                     tts_commit()
@@ -2372,6 +2430,11 @@ def run_ui(state, stop_flag, dev_line, err_line="", monitor=None, board=None,
              state.clips_paused, CLR["warning"], WARN_TINT),
             ("stop", "STOP", False, CLR["accent"], None),
         ]
+        n_pages = board.page_count()
+        if n_pages > 1:                # hotkey page chip; click steps onward
+            strip_defs.append(("page",
+                               f"PAGE {state.clip_page + 1}/{n_pages}",
+                               False, CLR["accent"], None))
         for key, lab, active, acol, tint in strip_defs:
             hm = q8(hover_step(("strip", key),
                                pygame.Rect(sx, STRIP_Y, 10, STRIP_H).collidepoint(mouse_pos)
@@ -2479,14 +2542,15 @@ def run_ui(state, stop_flag, dev_line, err_line="", monitor=None, board=None,
                 ds = T(f_small, clip_secs[ci],
                        CLR["muted"] if hm > 0.5 else CLR["faint"])
                 screen.blit(ds, (r.x + 10, r.bottom - 10 - ds.get_height()))
-            if ci < 9:                                 # hotkey badge
+            pg0 = state.clip_page * 9
+            if pg0 <= ci < pg0 + 9:                    # hotkey badge (this page)
                 hot = prog is not None or f > 0.05
                 brect = pygame.Rect(r.right - 10 - 16, r.y + 8, 16, 16)
                 pygame.draw.rect(screen,
                                  mixc(CLR["bg"], CLR["accent"], 0.45) if hot
                                  else CLR["strokeHover"],
                                  brect, width=1, border_radius=4)
-                bs = T(f_badge, str(ci + 1),
+                bs = T(f_badge, str(ci - pg0 + 1),
                        CLR["accent"] if hot else CLR["muted"])
                 screen.blit(bs, (brect.centerx - bs.get_width() // 2,
                                  brect.centery - bs.get_height() // 2))

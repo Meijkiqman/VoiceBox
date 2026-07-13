@@ -80,6 +80,41 @@ cb(silent, out, frames, None, None)
 check("stop clears mic voices, tells player, un-pauses",
       len(state.voices) == 0 and fp.stopped == 1 and not state.clips_paused)
 
+# ------------------------------------------------------------- hotkey pages
+check("nine clips are one page", b.page_count() == 1)
+b.play_hot(2)
+check("page 0: slot plays the clip directly", drain_ints() == [2])
+
+state.clips = [np.full(4000, 0.1, dtype=np.float32) for _ in range(21)]
+state.clip_names = [f"clip{i+1}" for i in range(21)]
+check("21 clips are three pages", b.page_count() == 3)
+check("page steps forward", b.set_page(+1) == 1)
+b.play_hot(2)
+check("page 1: slot 2 fires clip 11", drain_ints() == [11])
+check("page wraps around", b.set_page(+1) == 2 and b.set_page(+1) == 0)
+check("page steps backward with wrap", b.set_page(-1) == 2)
+b.play_hot(8)
+check("last page: overhanging slot is ignored", drain_ints() == [])
+b.play_hot(2)
+check("last page: valid slot fires", drain_ints() == [20])
+
+# ------------------------------------------------------------------- rescan
+seen_version = state.clips_version
+new_clips = ([np.full(2000, 0.2, dtype=np.float32) for _ in range(4)],
+             [f"new{i+1}" for i in range(4)])
+old_load = voicebox.load_clips
+voicebox.load_clips = lambda: new_clips
+b.rescan()
+voicebox.load_clips = old_load
+check("rescan swaps in the new clips",
+      len(state.clips) == 4 and state.clip_names == ["new1", "new2",
+                                                     "new3", "new4"])
+check("rescan bumps the UI version", state.clips_version == seen_version + 1)
+check("rescan clamps the page", state.clip_page == 0)
+check("rescan announces the count", "4 sound(s)" in state.status_msg)
+b.play_hot(1)
+check("hotkeys hit the fresh list", drain_ints() == [1])
+
 # ------------------------------------- fallback Test start drains the backlog
 # With no main stream and Test off, nothing consumes state.events; opening the
 # fallback stream must clear queued clicks instead of firing them all at once.

@@ -22,9 +22,11 @@ real mic --> [VoiceBox: pitch/effects/soundboard | or RVC AI voice] --> VB-CABLE
   saved to `settings.json` (autosaved while running) and restored on the
   next launch.
 - **Soundboard** - drop audio files (wav/flac/ogg/mp3) into `sounds/`; each
-  becomes a grid tile. Keys 1-9 fire the first nine. You always hear sounds
-  locally; the "To mic" toggle decides whether Discord hears them too.
-  Pause freezes everything mid-clip, Stop clears it.
+  becomes a grid tile ("Rescan sounds" picks up new files without a
+  restart). Keys 1-9 fire the current hotkey page; Tab / `]` / `[` or the
+  PAGE chip flip pages, so every clip is reachable from the keyboard. You
+  always hear sounds locally; the "To mic" toggle decides whether Discord
+  hears them too. Pause freezes everything mid-clip, Stop clears it.
 - **AI voice** - point `RVC_DIR` in `voicebox.py` at an RVC-beta package with
   `weights/*.pth` models; VoiceBox runs `rvc_worker.py` on RVC's own bundled
   CUDA Python and pipes the converted voice into the cable. Pick the
