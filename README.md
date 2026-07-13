@@ -50,6 +50,9 @@ real mic --> [VoiceBox: pitch/effects/soundboard | or RVC AI voice] --> VB-CABLE
   gates room hiss ahead of the effect chain (grit/reverb amplify it
   otherwise), with hold + slow release so word tails survive. Threshold
   adjustable from the menu.
+- **Record output** - one menu toggle writes the processed mix (voice +
+  effects + soundboard + TTS) to `recordings/*.wav`, handy for testing
+  presets or keeping funny moments.
 - **Test - hear myself** self-listen, live mic meter with peak-hold,
   keyboard + mouse + game controller navigation, remappable controls
   (`controls.json`), crash-proof against malformed config.

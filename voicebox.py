@@ -83,6 +83,7 @@ SOUNDS_DIR    = BASE_DIR / "sounds"       # anchored: works from any cwd
 CONTROLS_PATH = BASE_DIR / "controls.json"
 SETTINGS_PATH = BASE_DIR / "settings.json"       # dialed-in values, restored on launch
 USER_PRESETS_PATH = BASE_DIR / "user_presets.json"  # "Save preset" snapshots
+RECORDINGS_DIR = BASE_DIR / "recordings"         # "Record output" wav files
 
 TTS_PHRASES_PATH = BASE_DIR / "tts_phrases.json"  # saved TTS phrases
 TTS_CACHE_DIR    = BASE_DIR / "tts_cache"         # rendered wavs, keyed by text hash
@@ -484,6 +485,7 @@ class State:
         self.status_count = 0         # how many times a status fired (underrun tally)
         self.in_level = 0.0           # audio thread -> UI mic meter (block peak)
         self.monitor_q = None         # set to a Queue while self-listen is on
+        self.record_q = None          # set to a Queue while recording
 
     def set_pitch(self, semis):
         # The shifter is owned by the audio thread; hand the change over via the
@@ -741,6 +743,12 @@ def make_callback(state):
                 q.put_nowait(y.copy())
             except queue.Full:
                 pass                           # listener lagging: drop, never block
+        rq = state.record_q                    # mirror to the recorder, if on
+        if rq is not None:
+            try:
+                rq.put_nowait(y.copy())
+            except queue.Full:
+                pass                           # writer lagging: drop, never block
         outdata[:, 0] = y
     return callback
 
@@ -1004,6 +1012,83 @@ class LocalPlayer:
             except Exception:
                 pass
             self.stream = None
+
+
+class Recorder:
+    """Records the processed mix to recordings/voicebox-*.wav. The audio
+    callback mirrors its output into a queue (state.record_q, same pattern
+    as self-listen) and a writer thread drains it to disk, so the callback
+    never touches I/O. While the AI voice is live the worker owns the cable,
+    so a recording captures only VoiceBox's own mix (soundboard + TTS)."""
+
+    def __init__(self, state, folder=RECORDINGS_DIR):
+        self.state = state
+        self.folder = Path(folder)
+        self.path = None               # current/last file
+        self.started_at = 0.0
+        self.error = ""
+        self._thread = None
+        self._stop = None
+
+    @property
+    def on(self):
+        return self.state.record_q is not None
+
+    def _report(self, msg):
+        self.state.status_msg = msg
+        self.state.status_at = time.time()
+
+    def start(self):
+        if self.on:
+            return
+        name = time.strftime("voicebox-%Y%m%d-%H%M%S") + ".wav"
+        try:
+            self.folder.mkdir(exist_ok=True)
+            f = sf.SoundFile(str(self.folder / name), mode="w",
+                             samplerate=SAMPLERATE, channels=1,
+                             subtype="PCM_16")
+        except Exception as e:
+            self.error = str(e)
+            self._report(f"record: {e}")
+            return
+        self.path = self.folder / name
+        self.error = ""
+        self.started_at = time.time()
+        q = queue.Queue(maxsize=64)    # ~0.7 s of headroom for slow disks
+        self._stop = threading.Event()
+        self._thread = threading.Thread(target=self._writer, args=(f, q),
+                                        daemon=True)
+        self._thread.start()
+        self.state.record_q = q
+
+    def _writer(self, f, q):
+        try:
+            while not self._stop.is_set() or not q.empty():
+                try:
+                    f.write(q.get(timeout=0.2))
+                except queue.Empty:
+                    continue
+        finally:
+            try:
+                f.close()
+            except Exception:
+                pass
+
+    def stop(self):
+        if not self.on:
+            return
+        self.state.record_q = None     # callback stops feeding first
+        self._stop.set()
+        self._thread.join(timeout=3.0)
+        secs = time.time() - self.started_at
+        self._report(f"saved {self.path.name} ({secs:.0f}s)")
+
+    def toggle(self):
+        self.stop() if self.on else self.start()
+
+    def close(self):
+        if self.on:
+            self.stop()
 
 
 class Board:
@@ -1534,7 +1619,7 @@ class Menu:
     controller uses, so behavior is identical across input devices."""
 
     def __init__(self, state, stop_flag, monitor=None, board=None, ai=None,
-                 hotkeys=None, engine=None):
+                 hotkeys=None, engine=None, recorder=None):
         self.state = state
         self.stop_flag = stop_flag
         self.monitor = monitor
@@ -1542,6 +1627,7 @@ class Menu:
         self.ai = ai
         self.hotkeys = hotkeys
         self.engine = engine
+        self.recorder = recorder
         self.sel = 0
         self.flash = {}               # item index -> flash-until timestamp
         s = state
@@ -1619,6 +1705,14 @@ class Menu:
                 lambda: "ON" if monitor.on else "off",
                 select=self._toggle_monitor,
                 adjust=lambda d: self._toggle_monitor()))
+        if recorder is not None:
+            self.items.append(MenuItem(
+                "Record output",
+                lambda: (f"REC {int(time.time() - recorder.started_at) // 60}:"
+                         f"{int(time.time() - recorder.started_at) % 60:02d}"
+                         if recorder.on else "off"),
+                select=recorder.toggle,
+                adjust=lambda d: recorder.toggle()))
         if hotkeys is not None:
             self.items.append(MenuItem(
                 "Global hotkeys",
@@ -1712,7 +1806,7 @@ class Menu:
 
 
 def run_ui(state, stop_flag, dev_line, err_line="", monitor=None, board=None,
-           ai=None, tts=None, hotkeys=None, engine=None):
+           ai=None, tts=None, hotkeys=None, engine=None, recorder=None):
     """VoiceBox skin, ported from design/VoiceBox Skin.dc.html.
 
     Faithful to the tokens JSON + motion spec in that file: Space Grotesk for
@@ -1812,7 +1906,8 @@ def run_ui(state, stop_flag, dev_line, err_line="", monitor=None, board=None,
     f_strip = _font("JetBrainsMono-Bold.ttf", 11, "consolas", True)
     f_foot = _font("JetBrainsMono-Medium.ttf", 11, "consolas")
 
-    menu = Menu(state, stop_flag, monitor, board, ai, hotkeys, engine)
+    menu = Menu(state, stop_flag, monitor, board, ai, hotkeys, engine,
+                recorder)
     board = menu.board
     if tts is None:
         tts = TTSBank(state, getattr(board, "player", None), monitor, ai)
@@ -1937,7 +2032,8 @@ def run_ui(state, stop_flag, dev_line, err_line="", monitor=None, board=None,
         "TTS voice FX": "TTS", "TTS volume": "TTS",
         "Sounds to mic": "SOUNDS", "Pause sounds": "SOUNDS",
         "Stop all sounds": "SOUNDS", "Rescan sounds": "SOUNDS",
-        "Test - hear myself": "SYSTEM", "Global hotkeys": "SYSTEM",
+        "Test - hear myself": "SYSTEM", "Record output": "SYSTEM",
+        "Global hotkeys": "SYSTEM",
         "Input device": "DEVICES", "Output device": "DEVICES",
         "Quit": "SYSTEM",
     }
@@ -2063,6 +2159,8 @@ def run_ui(state, stop_flag, dev_line, err_line="", monitor=None, board=None,
         if val == "PAUSED":
             return f_valF, CLR["warning"], CLR["warning"]
         if val == "MUTED":
+            return f_valF, CLR["danger"], CLR["danger"]
+        if val.startswith("REC "):
             return f_valF, CLR["danger"], CLR["danger"]
         if val == "error":
             return f_valF, CLR["danger"], CLR["danger"]
@@ -2861,15 +2959,17 @@ def main():
     tts = TTSBank(state, player, monitor, ai)
     tts.warm()                    # synthesize saved phrases in the background
     hotkeys = GlobalHotkeys(state, board)
+    recorder = Recorder(state)
     threading.Thread(target=settings_autosave, args=(state, stop_flag),
                      daemon=True).start()
     try:
         run_ui(state, stop_flag, engine.dev_line, engine.error, monitor,
-               board, ai, tts, hotkeys, engine)
+               board, ai, tts, hotkeys, engine, recorder)
     except KeyboardInterrupt:
         pass
     finally:
         save_settings(state.snapshot())
+        recorder.close()               # before the stream: flush what's queued
         hotkeys.close()
         ai.stop()
         monitor.close()
