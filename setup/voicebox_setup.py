@@ -32,8 +32,10 @@ PYTHON_VERSION = "3.11.9"
 PYTHON_URL = (f"https://www.python.org/ftp/python/{PYTHON_VERSION}/"
               f"python-{PYTHON_VERSION}-amd64.exe")
 CABLE_URL = "https://download.vb-audio.com/Download_CABLE/VBCABLE_Driver_Pack45.zip"
-PACKAGES = ["numpy", "scipy", "sounddevice", "soundfile", "pygame"]
-APP_FILES = ["voicebox.py", "controls.json", "dlc.json", "VoiceBox.bat"]
+PACKAGES = ["numpy", "scipy", "sounddevice", "soundfile", "pygame", "keyboard"]
+APP_FILES = ["voicebox.py", "rvc_worker.py", "controls.json", "VoiceBox.bat",
+             "requirements.txt"]
+APP_DIRS = ["voicebox", "assets"]      # the app package + bundled fonts
 INSTALL_DIR = Path(os.environ.get("LOCALAPPDATA", str(Path.home()))) / "VoiceBox"
 
 
@@ -214,6 +216,12 @@ def step_app(url, skip):
         f = src / name
         if f.is_file():
             shutil.copy2(f, INSTALL_DIR / name)
+            copied += 1
+    for name in APP_DIRS:
+        d = src / name
+        if d.is_dir():
+            shutil.copytree(d, INSTALL_DIR / name, dirs_exist_ok=True,
+                            ignore=shutil.ignore_patterns("__pycache__"))
             copied += 1
     if not copied:
         raise RuntimeError(f"no app files found in {src}")

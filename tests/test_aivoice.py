@@ -10,7 +10,7 @@ from _common import check, finish
 import numpy as np
 import voicebox
 
-voicebox.load_clips = lambda: ([np.full(4000, 0.1, np.float32)], ["clip1"])
+voicebox.soundboard.load_clips = lambda: ([np.full(4000, 0.1, np.float32)], ["clip1"])
 
 # ------------------------------------------------------------ fake RVC folder
 root = Path(tempfile.mkdtemp()) / "rvc"

@@ -27,7 +27,8 @@ real mic --> [VoiceBox: pitch/effects/soundboard | or RVC AI voice] --> VB-CABLE
   PAGE chip flip pages, so every clip is reachable from the keyboard. You
   always hear sounds locally; the "To mic" toggle decides whether Discord
   hears them too. Pause freezes everything mid-clip, Stop clears it.
-- **AI voice** - point `RVC_DIR` in `voicebox.py` at an RVC-beta package with
+- **AI voice** - point `"rvc_dir"` in `settings.json` (or `RVC_DIR` in
+  `voicebox/config.py`) at an RVC-beta package with
   `weights/*.pth` models; VoiceBox runs `rvc_worker.py` on RVC's own bundled
   CUDA Python and pipes the converted voice into the cable. Pick the
   character from the menu; the soundboard keeps working on top.
@@ -95,7 +96,18 @@ keyboard/mouse UI runs.
 ## Project layout
 
 ```
-voicebox.py       the app: audio engine, effects, soundboard, UI (pygame)
+voicebox.py       launcher: python voicebox.py (same as python -m voicebox)
+voicebox/         the app package
+  config.py         paths, audio constants, presets, default bindings
+  dsp.py            pitch shifter + effect DSP (audio-thread only)
+  state.py          shared runtime state, settings persistence, user presets
+  audio.py          stream callback, device engine, self-listen, recorder
+  soundboard.py     clip loading + the Board controller
+  aivoice.py        RVC worker process lifecycle
+  tts.py            speech rendering, cache, phrase bank
+  controls.py       controls.json parsing + global hotkeys
+  ui.py             the pygame window (menu, grid, TTS panel)
+  app.py            wiring + main()
 rvc_worker.py     headless RVC realtime worker (runs on RVC's runtime python)
 VoiceBox.bat      run-from-source launcher (auto-installs deps)
 controls.json     input bindings (delete to restore defaults)

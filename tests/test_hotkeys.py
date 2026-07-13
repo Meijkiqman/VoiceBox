@@ -7,7 +7,7 @@ from _common import check, finish
 import numpy as np
 import voicebox
 
-voicebox.load_clips = lambda: (
+voicebox.soundboard.load_clips = lambda: (
     [np.full(1000, 0.1, np.float32), np.full(1000, 0.2, np.float32)],
     ["clip1", "clip2"])
 

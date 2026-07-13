@@ -10,7 +10,7 @@ from _common import check, finish
 import numpy as np
 import voicebox
 
-voicebox.load_clips = lambda: ([np.full(1000, 0.1, np.float32)], ["clip1"])
+voicebox.soundboard.load_clips = lambda: ([np.full(1000, 0.1, np.float32)], ["clip1"])
 
 # deterministic fake synth: no speech engine, no cache files
 TONE = np.full(2400, 0.2, dtype=np.float32)          # 50 ms at 48k
@@ -25,7 +25,7 @@ def fake_synthesize(text, voice=None, rate=0):
     return TONE.copy(), FAKE_WAV
 
 
-voicebox.tts_synthesize = fake_synthesize
+voicebox.tts.tts_synthesize = fake_synthesize
 
 
 def wait_status(bank, text, timeout=2.0):

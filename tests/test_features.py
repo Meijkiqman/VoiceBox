@@ -12,7 +12,7 @@ import voicebox
 def fake_load_clips():
     clips = [np.full(1000, 0.1, dtype=np.float32) for _ in range(9)]
     return clips, [f"clip{i+1}" for i in range(9)]
-voicebox.load_clips = fake_load_clips
+voicebox.soundboard.load_clips = fake_load_clips
 
 state = voicebox.State()
 cb = voicebox.make_callback(state)

@@ -10,7 +10,7 @@ from _common import check, finish
 import numpy as np
 import voicebox
 
-voicebox.load_clips = lambda: ([], [])
+voicebox.soundboard.load_clips = lambda: ([], [])
 tmpdir = Path(tempfile.mkdtemp())
 
 
@@ -34,8 +34,8 @@ class FakeWav:
         self.closed = True
 
 
-real_sf = voicebox.sf
-voicebox.sf = types.SimpleNamespace(SoundFile=FakeWav)
+real_sf = voicebox.audio.sf
+voicebox.audio.sf = types.SimpleNamespace(SoundFile=FakeWav)
 
 # ------------------------------------------------------------ start/feed/stop
 state = voicebox.State()
@@ -90,5 +90,5 @@ cb(loud, out, frames, None, None)
 check("full record queue drops instead of blocking", time.time() - t0 < 0.1)
 state.record_q = None
 
-voicebox.sf = real_sf
+voicebox.audio.sf = real_sf
 finish()

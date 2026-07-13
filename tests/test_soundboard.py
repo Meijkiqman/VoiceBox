@@ -11,7 +11,7 @@ import voicebox
 def fake_load_clips():
     clips = [np.full(4000, 0.1, dtype=np.float32) for _ in range(9)]
     return clips, [f"clip{i+1}" for i in range(9)]
-voicebox.load_clips = fake_load_clips
+voicebox.soundboard.load_clips = fake_load_clips
 
 state = voicebox.State()
 cb = voicebox.make_callback(state)
@@ -102,10 +102,10 @@ check("last page: valid slot fires", drain_ints() == [20])
 seen_version = state.clips_version
 new_clips = ([np.full(2000, 0.2, dtype=np.float32) for _ in range(4)],
              [f"new{i+1}" for i in range(4)])
-old_load = voicebox.load_clips
-voicebox.load_clips = lambda: new_clips
+old_load = voicebox.soundboard.load_clips
+voicebox.soundboard.load_clips = lambda: new_clips
 b.rescan()
-voicebox.load_clips = old_load
+voicebox.soundboard.load_clips = old_load
 check("rescan swaps in the new clips",
       len(state.clips) == 4 and state.clip_names == ["new1", "new2",
                                                      "new3", "new4"])

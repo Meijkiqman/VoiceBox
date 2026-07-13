@@ -1,0 +1,83 @@
+"""
+VoiceBox - real-time voice changer + soundboard for Discord (or anything).
+
+HOW IT WORKS
+------------
+    real mic --> [this package: pitch shift + effects + soundboard] --> VB-CABLE Input
+                                                                             |
+                                                          Discord input = "CABLE Output"
+
+SETUP (Windows)
+---------------
+1. Install VB-CABLE:  https://vb-audio.com/Cable/  (run installer as admin, reboot).
+2. pip install -r requirements.txt   (numpy scipy sounddevice soundfile pygame keyboard)
+3. Put some .wav files in the ./sounds folder.
+4. Run:  python voicebox.py --list      (find your device names)
+5. Pick devices from the DEVICES menu rows (or edit voicebox/config.py).
+6. Run:  python voicebox.py
+7. In Discord: Settings -> Voice & Video -> Input Device = "CABLE Output".
+
+macOS: use BlackHole instead of VB-CABLE.  Linux: create a null sink with
+`pactl load-module module-null-sink sink_name=voicebox` and point Discord at its monitor.
+
+CONTROLS
+--------
+A pygame menu window handles all input (keyboard + controller + mouse).
+Inputs only fire while the VoiceBox window has focus, so typing in Discord is
+safe. Bindings live in controls.json next to this file - edit to remap,
+delete to restore defaults.
+
+Mouse: hover highlights a row, click activates it, click the < > arrows to
+adjust a value, scroll wheel moves the selection (or scrolls the grid when
+the pointer is over it).
+
+SOUNDBOARD
+----------
+Every audio file in ./sounds (wav/flac/ogg/mp3, first 64, alphabetical) gets
+a button in the grid on the right. Clicking a button always plays the sound
+locally so you hear it yourself; while the "To mic" toggle is on it is also
+mixed into the mic channel. Pause freezes all playing sounds (both paths),
+Stop clears them. Keys 1-9 trigger the first nine sounds.
+
+TEXT TO SPEECH
+--------------
+The panel below the soundboard speaks typed phrases into the mic channel.
+Type in the box, press Enter (or ADD) to save - phrases persist in
+tts_phrases.json and are synthesized once into tts_cache/ (Windows SAPI via
+PowerShell; espeak / `say` elsewhere). Click a phrase to speak it, the x on
+its row deletes it. With "TTS voice FX" on (menu row or the FX chip) the
+speech runs through the same pitch/effect chain as your voice - and through
+the AI voice while the RVC worker is live; off = clean TTS.
+
+EFFECTS & PRESETS
+-----------------
+Pitch, robot/vocoder mix, helmet doubler, grit, reverb, echo, radio band-pass
+and bass boost are individual menu rows. The Preset row applies curated
+combinations (Space Marine, Ghost, ...) which can be tweaked freely afterwards
+- the row shows "Custom" once any value diverges from the applied preset.
+"Test - hear myself" mirrors the processed mix to your speakers.
+
+Defaults:  arrows/WASD or d-pad/left stick = navigate,  Enter/Space or A =
+select,  left/right adjusts values,  1-9 = play clip,  0/Backspace or Y =
+stop clips,  Esc or B = quit.
+"""
+
+import sys
+import time
+
+import numpy as np
+import sounddevice as sd
+import soundfile as sf
+
+from . import (aivoice, app, audio, config, controls, dsp, soundboard, state,
+               tts, ui)
+from .config import *          # noqa: F401,F403 - flat API kept for tests
+from .dsp import *             # noqa: F401,F403
+from .soundboard import *      # noqa: F401,F403
+from .state import *           # noqa: F401,F403
+from .audio import *           # noqa: F401,F403
+from .aivoice import *         # noqa: F401,F403
+from .tts import *             # noqa: F401,F403
+from .controls import *        # noqa: F401,F403
+from .ui import *              # noqa: F401,F403
+from .app import main          # noqa: F401

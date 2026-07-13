@@ -9,10 +9,10 @@ if errorlevel 1 (
     exit /b
 )
 
-python -c "import numpy, scipy, sounddevice, soundfile, pygame" >nul 2>&1
+python -c "import numpy, scipy, sounddevice, soundfile, pygame, keyboard" >nul 2>&1
 if errorlevel 1 (
     echo Installing required packages...
-    pip install numpy scipy sounddevice soundfile pygame
+    pip install numpy scipy sounddevice soundfile pygame keyboard
 )
 
 python voicebox.py %*

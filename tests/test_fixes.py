@@ -12,7 +12,7 @@ def fake_load_clips():
     clips = [np.full(1000 + 100 * i, 0.1, dtype=np.float32) for i in range(9)]
     names = [f"clip{i+1}" for i in range(9)]
     return clips, names
-voicebox.load_clips = fake_load_clips
+voicebox.soundboard.load_clips = fake_load_clips
 
 # ------------------------------------------------- 1. callback event protocol
 state = voicebox.State()

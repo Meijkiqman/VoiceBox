@@ -4,7 +4,7 @@ from _common import check, finish
 import numpy as np  # noqa: F401  (voicebox import needs it)
 import voicebox
 
-voicebox.load_clips = lambda: ([], [])
+voicebox.soundboard.load_clips = lambda: ([], [])
 
 
 class FakeStream:
@@ -48,8 +48,8 @@ class FakeSD:
         return s
 
 
-real_sd = voicebox.sd
-voicebox.sd = FakeSD()
+real_sd = voicebox.audio.sd
+voicebox.audio.sd = FakeSD()
 
 # -------------------------------------------------------------- open/resolve
 state = voicebox.State()
@@ -110,21 +110,21 @@ check("stale saved device falls back to default",
 check("fallback is announced", "not found" in gone.status_msg)
 
 # ------------------------------------------------------------- failure paths
-voicebox.sd = FakeSD(stream_error="portaudio exploded")
+voicebox.audio.sd = FakeSD(stream_error="portaudio exploded")
 bad = voicebox.AudioEngine(voicebox.State())
 check("stream failure keeps the UI alive",
       bad.open() is False and bad.stream is None
       and bad.error.startswith("audio unavailable"))
 check("failed open clears the latency readout", bad.latency_ms is None)
 
-voicebox.sd = FakeSD(devices=[])
+voicebox.audio.sd = FakeSD(devices=[])
 none = voicebox.AudioEngine(voicebox.State())
 check("no devices -> error, no crash", none.open() is False)
 check("no devices -> cycle is a no-op", none.cycle("input", +1) is None
       and none.stream is None)
 
 # ------------------------------------------------------------ menu wiring
-voicebox.sd = FakeSD()
+voicebox.audio.sd = FakeSD()
 mstate = voicebox.State()
 meng = voicebox.AudioEngine(mstate)
 meng.open()
@@ -138,5 +138,5 @@ row.adjust(+1)
 check("device row adjust switches the device",
       mstate.input_device == "Default Mic")
 
-voicebox.sd = real_sd
+voicebox.audio.sd = real_sd
 finish()

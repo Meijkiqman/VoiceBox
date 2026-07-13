@@ -10,7 +10,7 @@ from _common import check, finish
 import numpy as np
 import voicebox
 
-voicebox.load_clips = lambda: ([], [])
+voicebox.soundboard.load_clips = lambda: ([], [])
 tmpdir = Path(tempfile.mkdtemp())
 
 # --------------------------------------------------------- snapshot/restore

@@ -4,7 +4,7 @@ from _common import check, finish
 import numpy as np
 import voicebox
 
-voicebox.load_clips = lambda: ([], [])
+voicebox.soundboard.load_clips = lambda: ([], [])
 frames = voicebox.BLOCKSIZE
 zeros = np.zeros(frames, dtype=np.float32)
 impulse = zeros.copy(); impulse[0] = 1.0
