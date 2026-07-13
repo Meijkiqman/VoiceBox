@@ -384,6 +384,7 @@ PERSIST_FIELDS = {
     "voice_gain":   (0.0, 1.5),
     "clip_gain":    (0.0, 1.5),
     "tts_gain":     (0.0, 1.5),
+    "tts_rate":     (-10.0, 10.0),
     "gate_db":      (-70.0, -10.0),
     "radio":        bool,
     "gate_on":      bool,
@@ -394,6 +395,7 @@ PERSIST_FIELDS = {
     "input_device":  str,
     "output_device": str,
     "rvc_dir":       str,
+    "tts_voice":     str,
 }
 
 
@@ -461,6 +463,8 @@ class State:
         self.clips_paused = False     # freezes all playing sounds (both paths)
         self.tts_fx = True            # TTS through the voice chain / AI (off = clean)
         self.tts_gain = 1.0           # TTS level on the mic channel
+        self.tts_voice = None         # engine voice name; None = OS default
+        self.tts_rate = 0.0           # SAPI -10..10 speaking rate
         self.ai_mute = False          # AI worker owns the voice; mute ours
         self.input_device = None      # device name; None = INPUT_DEVICE_MATCH
         self.output_device = None     # device name; None = OUTPUT_DEVICE_MATCH
@@ -1297,21 +1301,43 @@ class AiVoice:
 
 
 # ----------------------------------------------------------------------------- TTS
-def synth_tts_wav(text, wav_path):
+def synth_tts_wav(text, wav_path, voice=None, rate=0):
     """Render text to a wav file with the OS speech engine (blocking).
     Windows: SAPI via PowerShell. Fallbacks: macOS `say`, else espeak.
-    The text travels over stdin so no shell-quoting issue can arise."""
+    `voice` is a name substring (None = engine default); `rate` is the SAPI
+    -10..10 scale, mapped to words/minute for say/espeak. The text travels
+    over stdin so no shell-quoting issue can arise."""
+    rate = int(max(-10, min(10, rate)))
+    wpm = int(175 * 2.0 ** (rate / 10.0))      # say/espeak equivalent
     if sys.platform == "win32":
         path_lit = str(wav_path).replace("'", "''")
+        sel = ""
+        if voice:
+            v_lit = str(voice).replace("'", "''")
+            sel = ("$v = $s.GetInstalledVoices() | Where-Object "
+                   f"{{ $_.VoiceInfo.Name -like '*{v_lit}*' }} "
+                   "| Select-Object -First 1; "
+                   "if ($v) { $s.SelectVoice($v.VoiceInfo.Name) }; ")
         cmd = ["powershell", "-NoProfile", "-NonInteractive", "-Command",
                "Add-Type -AssemblyName System.Speech; "
                "$s = New-Object System.Speech.Synthesis.SpeechSynthesizer; "
+               f"$s.Rate = {rate}; " + sel +
                f"$s.SetOutputToWaveFile('{path_lit}'); "
                "$s.Speak([Console]::In.ReadToEnd()); $s.Dispose()"]
     elif sys.platform == "darwin":
-        cmd = ["say", "-o", str(wav_path), "--data-format=LEI16@22050", "-f", "-"]
+        cmd = ["say", "-o", str(wav_path), "--data-format=LEI16@22050"]
+        if voice:
+            cmd += ["-v", str(voice)]
+        if rate:
+            cmd += ["-r", str(wpm)]
+        cmd += ["-f", "-"]
     else:
-        cmd = ["espeak", "-w", str(wav_path), "--stdin"]
+        cmd = ["espeak", "-w", str(wav_path)]
+        if voice:
+            cmd += ["-v", str(voice)]
+        if rate:
+            cmd += ["-s", str(wpm)]
+        cmd += ["--stdin"]
     r = subprocess.run(cmd, input=text, text=True, capture_output=True,
                        timeout=60,
                        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
@@ -1320,15 +1346,47 @@ def synth_tts_wav(text, wav_path):
         raise RuntimeError(detail[-1][:80] if detail else "speech engine failed")
 
 
-def tts_synthesize(text):
+def list_tts_voices():
+    """Installed TTS voice names, for the "TTS voice" menu row (blocking;
+    runs on a background thread). Empty list on any failure."""
+    kw = dict(text=True, capture_output=True, timeout=20,
+              creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+    try:
+        if sys.platform == "win32":
+            r = subprocess.run(
+                ["powershell", "-NoProfile", "-NonInteractive", "-Command",
+                 "Add-Type -AssemblyName System.Speech; "
+                 "(New-Object System.Speech.Synthesis.SpeechSynthesizer)"
+                 ".GetInstalledVoices() "
+                 "| ForEach-Object { $_.VoiceInfo.Name }"], **kw)
+            return [ln.strip() for ln in r.stdout.splitlines() if ln.strip()]
+        if sys.platform == "darwin":
+            r = subprocess.run(["say", "-v", "?"], **kw)
+            return [ln.split()[0] for ln in r.stdout.splitlines() if ln.split()]
+        r = subprocess.run(["espeak", "--voices"], **kw)
+        return [ln.split()[3] for ln in r.stdout.splitlines()[1:]
+                if len(ln.split()) >= 4]
+    except Exception:
+        return []
+
+
+def tts_cache_path(text, voice=None, rate=0):
+    """Cache file for a (voice, rate, text) rendering - changing the voice
+    or rate must not serve stale audio, so they are part of the key."""
+    key = f"{voice or ''}|{float(rate):g}|{text}"
+    return TTS_CACHE_DIR / (hashlib.sha1(key.encode("utf-8")).hexdigest()[:16]
+                            + ".wav")
+
+
+def tts_synthesize(text, voice=None, rate=0):
     """text -> (mono float32 samples at SAMPLERATE, cached wav path).
-    Synthesized once, then served from tts_cache/ across restarts."""
+    Synthesized once per (voice, rate, text), then served from tts_cache/
+    across restarts."""
     TTS_CACHE_DIR.mkdir(exist_ok=True)
-    wav = TTS_CACHE_DIR / (hashlib.sha1(text.encode("utf-8")).hexdigest()[:16]
-                           + ".wav")
+    wav = tts_cache_path(text, voice, rate)
     if not wav.is_file():
         try:
-            synth_tts_wav(text, wav)
+            synth_tts_wav(text, wav, voice, rate)
         except BaseException:                  # incl. timeout: no half-written wavs
             wav.unlink(missing_ok=True)
             raise
@@ -1361,6 +1419,8 @@ class TTSBank:
         self.status = {}              # text -> "..." | "ready" | "error"
         self.flash = {}               # row index -> flash-until timestamp
         self.pending = None           # phrase to auto-play once synthesis lands
+        self.voice_names = None       # installed voices; None until listed
+        self._voices_kicked = False
 
     def _load(self):
         try:
@@ -1393,9 +1453,30 @@ class TTSBank:
         self.status[text] = "..."
         threading.Thread(target=self._synth_job, args=(text,), daemon=True).start()
 
+    def load_voice_names(self):
+        """List installed voices once, in the background (subprocess)."""
+        if self._voices_kicked:
+            return
+        self._voices_kicked = True
+
+        def job():
+            self.voice_names = list_tts_voices()
+        threading.Thread(target=job, daemon=True).start()
+
+    def invalidate(self):
+        """Voice/rate changed: rendered speech is stale. Phrases stay; the
+        next play re-synthesizes (disk cache makes switching back instant)."""
+        self.samples.clear()
+        self.wav_path.clear()
+        self.status.clear()
+        self.pending = None
+
     def _synth_job(self, text):
         try:
-            samples, wav = tts_synthesize(text)
+            with self.state.lock:
+                voice = getattr(self.state, "tts_voice", None)
+                rate = getattr(self.state, "tts_rate", 0)
+            samples, wav = tts_synthesize(text, voice, rate)
         except Exception as e:
             self.status[text] = "error"
             if self.pending == text:
@@ -1619,7 +1700,7 @@ class Menu:
     controller uses, so behavior is identical across input devices."""
 
     def __init__(self, state, stop_flag, monitor=None, board=None, ai=None,
-                 hotkeys=None, engine=None, recorder=None):
+                 hotkeys=None, engine=None, recorder=None, tts=None):
         self.state = state
         self.stop_flag = stop_flag
         self.monitor = monitor
@@ -1628,6 +1709,7 @@ class Menu:
         self.hotkeys = hotkeys
         self.engine = engine
         self.recorder = recorder
+        self.tts = tts
         self.sel = 0
         self.flash = {}               # item index -> flash-until timestamp
         s = state
@@ -1699,6 +1781,18 @@ class Menu:
             "TTS volume",
             lambda: f"{s.tts_gain:.0%}",
             adjust=lambda d: s.nudge("tts_gain", d * 0.05)))
+        if tts is not None:
+            tts.load_voice_names()     # listed by the time the row is reached
+            self.items.append(MenuItem(
+                "TTS voice",
+                self._tts_voice_label,
+                select=lambda: self._cycle_tts_voice(+1),
+                adjust=self._cycle_tts_voice))
+            self.items.append(MenuItem(
+                "TTS rate",
+                lambda: f"{s.tts_rate:+.0f}" if s.tts_rate else "normal",
+                select=self._reset_tts_rate,
+                adjust=self._adjust_tts_rate))
         if monitor is not None:
             self.items.append(MenuItem(
                 "Test - hear myself",
@@ -1775,6 +1869,32 @@ class Menu:
     def _toggle_tts_fx(self):
         with self.state.lock:
             self.state.tts_fx = not self.state.tts_fx
+
+    def _tts_voice_label(self):
+        v = self.state.tts_voice
+        if v is None:
+            return "default"
+        return v if len(v) <= 24 else v[:21] + "..."
+
+    def _cycle_tts_voice(self, d=1):
+        opts = [None] + (self.tts.voice_names or [])
+        try:
+            i = opts.index(self.state.tts_voice)
+        except ValueError:             # saved voice no longer installed
+            i = 0
+        with self.state.lock:
+            self.state.tts_voice = opts[(i + (1 if d >= 0 else -1)) % len(opts)]
+        self.tts.invalidate()
+
+    def _adjust_tts_rate(self, d):
+        with self.state.lock:
+            self.state.tts_rate = max(-10.0, min(10.0, self.state.tts_rate + d))
+        self.tts.invalidate()
+
+    def _reset_tts_rate(self):
+        with self.state.lock:
+            self.state.tts_rate = 0.0
+        self.tts.invalidate()
 
     def _toggle_monitor(self):
         self.monitor.toggle()
@@ -1906,11 +2026,13 @@ def run_ui(state, stop_flag, dev_line, err_line="", monitor=None, board=None,
     f_strip = _font("JetBrainsMono-Bold.ttf", 11, "consolas", True)
     f_foot = _font("JetBrainsMono-Medium.ttf", 11, "consolas")
 
-    menu = Menu(state, stop_flag, monitor, board, ai, hotkeys, engine,
-                recorder)
-    board = menu.board
+    if board is None:
+        board = Board(state)
     if tts is None:
         tts = TTSBank(state, getattr(board, "player", None), monitor, ai)
+    menu = Menu(state, stop_flag, monitor, board, ai, hotkeys, engine,
+                recorder, tts)
+    board = menu.board
     kb_action = {a: keys for a, keys in keymap.items()}
 
     def key_action(key):
@@ -2030,6 +2152,7 @@ def run_ui(state, stop_flag, dev_line, err_line="", monitor=None, board=None,
         "Voice volume": "EFFECTS", "Clip volume": "EFFECTS",
         "AI voice": "AI", "AI character": "AI",
         "TTS voice FX": "TTS", "TTS volume": "TTS",
+        "TTS voice": "TTS", "TTS rate": "TTS",
         "Sounds to mic": "SOUNDS", "Pause sounds": "SOUNDS",
         "Stop all sounds": "SOUNDS", "Rescan sounds": "SOUNDS",
         "Test - hear myself": "SYSTEM", "Record output": "SYSTEM",

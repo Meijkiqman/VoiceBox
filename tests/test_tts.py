@@ -18,8 +18,8 @@ FAKE_WAV = Path(tempfile.mkdtemp()) / "fake.wav"
 synth_calls = []
 
 
-def fake_synthesize(text):
-    synth_calls.append(text)
+def fake_synthesize(text, voice=None, rate=0):
+    synth_calls.append((text, voice, rate))
     if text == "boom":
         raise RuntimeError("engine exploded")
     return TONE.copy(), FAKE_WAV
@@ -251,5 +251,64 @@ while not ui_state.events.empty():
         int_events.append(ev)
 check("row click spoke the phrase to the mic", len(tts_events) >= 1)
 check("clip hotkeys gated while typing", int_events == [])
+
+# ---------------------------------------------------------- voice + rate
+p1 = voicebox.tts_cache_path("hello")
+check("cache path is stable", p1 == voicebox.tts_cache_path("hello"))
+check("cache path varies by voice",
+      p1 != voicebox.tts_cache_path("hello", voice="Zira"))
+check("cache path varies by rate",
+      p1 != voicebox.tts_cache_path("hello", rate=3))
+check("int and float rates share a key",
+      voicebox.tts_cache_path("hello", rate=3)
+      == voicebox.tts_cache_path("hello", rate=3.0))
+
+vstate = voicebox.State()
+with vstate.lock:
+    vstate.tts_voice = "Zira"
+    vstate.tts_rate = 4.0
+vbank = voicebox.TTSBank(vstate, path=Path(tempfile.mkdtemp()) / "p.json")
+synth_calls.clear()
+vbank.add("with voice")
+check("synth job passes the selected voice and rate",
+      wait_status(vbank, "with voice") == "ready"
+      and synth_calls == [("with voice", "Zira", 4.0)])
+
+check("bank starts with voices unlisted", vbank.voice_names is None)
+vbank.invalidate()
+check("invalidate clears rendered speech, keeps phrases",
+      vbank.phrases == ["with voice"] and vbank.samples == {}
+      and vbank.status == {})
+
+# menu rows cycle voice/rate and invalidate the bank
+vbank.voice_names = ["Alpha", "Beta"]
+vbank._voices_kicked = True                   # don't spawn the lister thread
+menu2 = voicebox.Menu(vstate, threading.Event(), tts=vbank)
+labels2 = [it.label for it in menu2.items]
+check("TTS voice + rate rows present",
+      "TTS voice" in labels2 and "TTS rate" in labels2)
+with vstate.lock:
+    vstate.tts_voice = None
+vrow = next(it for it in menu2.items if it.label == "TTS voice")
+vrow.adjust(+1)
+check("voice row cycles into the list", vstate.tts_voice == "Alpha")
+vrow.adjust(+1)
+vrow.adjust(+1)
+check("voice row wraps back to default", vstate.tts_voice is None)
+check("voice label shows default", vrow.value_fn() == "default")
+
+vbank.samples["x"] = TONE
+rrow = next(it for it in menu2.items if it.label == "TTS rate")
+with vstate.lock:
+    vstate.tts_rate = 0.0
+rrow.adjust(+1)
+check("rate row steps and invalidates",
+      vstate.tts_rate == 1.0 and vbank.samples == {})
+for _ in range(15):
+    rrow.adjust(+1)
+check("rate clamps at +10", vstate.tts_rate == 10.0)
+rrow.select()
+check("rate select resets to normal",
+      vstate.tts_rate == 0.0 and rrow.value_fn() == "normal")
 
 finish()

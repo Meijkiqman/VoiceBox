@@ -36,8 +36,10 @@ real mic --> [VoiceBox: pitch/effects/soundboard | or RVC AI voice] --> VB-CABLE
   speak into the mic, `x` to delete) and persist in `tts_phrases.json`.
   With "TTS voice FX" on, the speech goes through the same pitch/effect
   chain as your voice - and through the AI voice while the worker is live;
-  toggle it off for clean TTS. Speech is rendered once with the Windows
-  voice (SAPI) and cached in `tts_cache/`.
+  toggle it off for clean TTS. The "TTS voice" and "TTS rate" rows pick
+  any installed OS voice and speaking speed (persisted). Speech is
+  rendered once per voice/rate with the OS engine (SAPI on Windows) and
+  cached in `tts_cache/`.
 - **Global hotkeys** - the soundboard works while a game or Discord has
   focus: Ctrl+Alt+1-9 fire clips, Ctrl+Alt+0 stops everything, Ctrl+Alt+P
   cycles presets, Ctrl+Alt+M toggles mute. Remappable in `controls.json`
