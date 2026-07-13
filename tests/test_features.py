@@ -98,8 +98,9 @@ labels = [it.label for it in menu.items]
 check("settings rows in order",
       labels == ["Preset", "Pitch", "Robot voice", "Helmet doubler",
                  "Grit / growl", "Reverb", "Echo", "Radio voice", "Bass boost",
-                 "Voice volume", "Clip volume", "Test - hear myself",
-                 "Sounds to mic", "Pause sounds", "Stop all sounds", "Quit"],
+                 "Voice volume", "Clip volume", "TTS voice FX", "TTS volume",
+                 "Test - hear myself", "Sounds to mic", "Pause sounds",
+                 "Stop all sounds", "Quit"],
       str(labels))
 menu_nomon = voicebox.Menu(state, stop_flag)
 check("Menu without monitor omits Test row",

@@ -10,8 +10,11 @@ MUST be run with RVC's own bundled interpreter and cwd set to the RVC folder
         --index <path.index> --output-device "CABLE Input"
 
 Status protocol on stdout (read by VoiceBox):  "STATUS loading",
-"STATUS running ...", "STATUS error <msg>".  --selftest converts a few
-synthetic blocks and reports timing instead of opening audio devices.
+"STATUS running ...", "STATUS error <msg>".  VoiceBox may write
+"PLAY <wav path>" lines on stdin; those files are mixed into the mic input,
+so the model speaks them in the AI voice (the TTS-through-AI path).
+--selftest converts a few synthetic blocks and reports timing instead of
+opening audio devices.
 """
 import argparse
 import sys
@@ -100,6 +103,30 @@ if __name__ == "__main__":
     rate1 = block_frame / span
     rate2 = (crossfade_frame + sola_search_frame + block_frame) / span
 
+    # ---- TTS injection ------------------------------------------------------
+    # VoiceBox writes "PLAY <wav>" lines on our stdin; the samples are mixed
+    # into the mic signal (after the noise gate) so the model converts them
+    # like normal speech. Loading/resampling happens off the audio thread.
+    import queue as _queue
+    import threading
+
+    tts_q = _queue.Queue()
+    tts_buf = [np.zeros(0, dtype=np.float32)]
+
+    def _stdin_listener():
+        try:
+            for line in sys.stdin:
+                line = line.strip()
+                if not line.startswith("PLAY "):
+                    continue
+                try:
+                    wav, _ = librosa.load(line[5:].strip(), sr=sr, mono=True)
+                    tts_q.put(np.asarray(wav, dtype=np.float32))
+                except Exception as e:
+                    print(f"STATUS error tts {e}", flush=True)
+        except Exception:
+            pass
+
     def process(indata):
         """One stereo block in (block_frame, 2) -> converted mono block out.
         Port of gui_v1.audio_callback (noise gate + infer + SOLA crossfade)."""
@@ -110,6 +137,12 @@ if __name__ == "__main__":
             for i, quiet in enumerate(db < args.threshold):
                 if quiet:
                     mono[i * 1024:(i + 1) * 1024] = 0
+        while not tts_q.empty():             # mix queued TTS into the mic
+            tts_buf[0] = np.concatenate([tts_buf[0], tts_q.get_nowait()])
+        if len(tts_buf[0]):
+            n = min(len(mono), len(tts_buf[0]))
+            mono[:n] += tts_buf[0][:n]
+            tts_buf[0] = tts_buf[0][n:]
         input_wav[:] = np.append(input_wav[block_frame:], mono)
         inp = torch.from_numpy(input_wav).to(device)
         res1 = resampler(inp)
@@ -171,6 +204,9 @@ if __name__ == "__main__":
         except Exception as e:
             print(f"STATUS error {e}", flush=True)
             outdata[:] = 0
+
+    if sys.stdin is not None:                # VoiceBox feeds TTS over stdin
+        threading.Thread(target=_stdin_listener, daemon=True).start()
 
     print(f"STATUS running sr={sr} block={block_frame} device={device}", flush=True)
     try:

@@ -39,6 +39,16 @@ locally so you hear it yourself; while the "To mic" toggle is on it is also
 mixed into the mic channel. Pause freezes all playing sounds (both paths),
 Stop clears them. Keys 1-9 trigger the first nine sounds.
 
+TEXT TO SPEECH
+--------------
+The panel below the soundboard speaks typed phrases into the mic channel.
+Type in the box, press Enter (or ADD) to save - phrases persist in
+tts_phrases.json and are synthesized once into tts_cache/ (Windows SAPI via
+PowerShell; espeak / `say` elsewhere). Click a phrase to speak it, the x on
+its row deletes it. With "TTS voice FX" on (menu row or the FX chip) the
+speech runs through the same pitch/effect chain as your voice - and through
+the AI voice while the RVC worker is live; off = clean TTS.
+
 EFFECTS & PRESETS
 -----------------
 Pitch, robot/vocoder mix, helmet doubler, grit, reverb, echo, radio band-pass
@@ -53,9 +63,11 @@ stop clips,  Esc or B = quit.
 """
 
 import argparse
+import hashlib
 import json
 import queue
 import subprocess
+import sys
 import threading
 import time
 from pathlib import Path
@@ -70,6 +82,10 @@ BASE_DIR      = Path(__file__).resolve().parent
 SOUNDS_DIR    = BASE_DIR / "sounds"       # anchored: works from any cwd
 CONTROLS_PATH = BASE_DIR / "controls.json"
 
+TTS_PHRASES_PATH = BASE_DIR / "tts_phrases.json"  # saved TTS phrases
+TTS_CACHE_DIR    = BASE_DIR / "tts_cache"         # rendered wavs, keyed by text hash
+TTS_MAX_CHARS    = 200                            # per-phrase length cap
+
 SAMPLERATE = 48000        # VB-CABLE runs at 48k by default
 BLOCKSIZE  = 512          # smaller = lower latency, larger = safer. 256-1024 typical
 CHANNELS   = 1            # mono processing path
@@ -79,7 +95,7 @@ CHANNELS   = 1            # mono processing path
 INPUT_DEVICE_MATCH   = None            # None = system default mic, or e.g. "Microphone"
 OUTPUT_DEVICE_MATCH  = "CABLE Input"   # the virtual cable's INPUT side
 
-WINDOW_SIZE = (960, 600)   # left: settings menu, right: soundboard grid
+WINDOW_SIZE = (960, 660)   # left: settings menu, right: soundboard grid + TTS panel
 MAX_CLIPS   = 64           # how many files from ./sounds get indexed
 
 # AI voice (RVC) integration. Point RVC_DIR at an extracted RVC-beta package
@@ -316,6 +332,8 @@ class State:
         self.preset_idx = 0
         self.clips_to_mic = True      # soundboard also feeds the mic channel
         self.clips_paused = False     # freezes all playing sounds (both paths)
+        self.tts_fx = True            # TTS through the voice chain / AI (off = clean)
+        self.tts_gain = 1.0           # TTS level on the mic channel
         self.ai_mute = False          # AI worker owns the voice; mute ours
         self.shifter = StreamingPitchShifter(SAMPLERATE, 0.0)  # audio thread only
         self.reverb_fx = Reverb()     # effect state: audio thread only
@@ -325,6 +343,7 @@ class State:
         self.bass_fx = BassBoost()
         self.clips, self.clip_names = load_clips()
         self.voices = []              # list of [samples, cursor]; audio thread only
+        self.tts_voices = []          # list of [samples, cursor, fx]; audio thread only
         self.events = queue.Queue()   # UI thread -> audio thread
         self.status_msg = ""          # audio thread -> UI (underruns etc.)
         self.status_at = 0.0          # when status_msg was last set
@@ -413,17 +432,37 @@ def make_callback(state):
                 state.clips_paused)
             reverb, echo, radio = state.reverb, state.echo, state.radio
             doubler, bass = state.doubler, state.bass
-            ai_mute = state.ai_mute
+            ai_mute, tts_gain = state.ai_mute, state.tts_gain
 
         # apply queued UI events (audio thread owns the shifter and voice list)
         while not state.events.empty():
             ev = state.events.get_nowait()
             if ev == "stop":
                 state.voices.clear()
+                state.tts_voices.clear()
             elif isinstance(ev, tuple) and ev[0] == "pitch":
                 state.shifter.set_semitones(ev[1])
+            elif isinstance(ev, tuple) and ev[0] == "tts":
+                state.tts_voices.append([ev[1], 0, bool(ev[2])])
             elif isinstance(ev, int) and 0 <= ev < len(state.clips):
                 state.voices.append([state.clips[ev], 0])
+
+        # TTS phrases: fx-tagged ones ride the mic signal itself, so the whole
+        # chain (pitch, robot, reverb, ...) treats them like speech; the rest
+        # (and everything while the AI owns the voice path) mixes in clean
+        # after the chain, like a soundboard clip. Pause freezes the cursors.
+        tts_pre = tts_post = None
+        if state.tts_voices and not clips_paused:
+            tts_pre = np.zeros(frames, dtype=np.float32)
+            tts_post = np.zeros(frames, dtype=np.float32)
+            still = []
+            for samples, cur, fx in state.tts_voices:
+                buf = tts_pre if (fx and not ai_mute) else tts_post
+                chunk = samples[cur:cur + frames]
+                buf[:len(chunk)] += chunk
+                if cur + frames < len(samples):
+                    still.append([samples, cur + frames, fx])
+            state.tts_voices = still
 
         if ai_mute:
             # the RVC worker feeds the converted voice into the cable itself;
@@ -431,7 +470,10 @@ def make_callback(state):
             y = np.zeros(frames, dtype=np.float32)
             carry = np.zeros(0, dtype=np.float32)
         else:
-            y = state.shifter.process(indata[:, 0].astype(np.float32) * voice_gain)
+            x = indata[:, 0].astype(np.float32) * voice_gain
+            if tts_pre is not None:
+                x = x + tts_pre * tts_gain
+            y = state.shifter.process(x)
 
             y = np.concatenate([carry, y]) if len(carry) else y
             if len(y) < frames:
@@ -478,6 +520,9 @@ def make_callback(state):
                 if cur + frames < len(samples):
                     still.append([samples, cur + frames])
             state.voices = still
+
+        if tts_post is not None:               # clean TTS joins after the chain
+            y += tts_post * tts_gain
 
         np.clip(y, -1.0, 1.0, out=y)          # prevent hard clipping distortion
         q = state.monitor_q                    # mirror to self-listen, if enabled
@@ -581,6 +626,11 @@ class LocalPlayer:
         if self._ensure():
             self.events.put(i)
 
+    def play_raw(self, samples):
+        """Queue raw samples (the TTS path) instead of a clip index."""
+        if self._ensure():
+            self.events.put(("raw", samples))
+
     def stop(self):
         self.events.put("stop")
 
@@ -611,6 +661,8 @@ class LocalPlayer:
             ev = self.events.get_nowait()
             if ev == "stop":
                 self.voices.clear()
+            elif isinstance(ev, tuple) and ev[0] == "raw":
+                self.voices.append([ev[1], 0])
             elif isinstance(ev, int) and 0 <= ev < len(state.clips):
                 self.voices.append([state.clips[ev], 0])
         y = np.zeros(frames, dtype=np.float32)
@@ -725,6 +777,20 @@ class AiVoice:
             self.stop()
             self.start()
 
+    def inject(self, wav_path):
+        """Feed a wav into the worker's mic input ("PLAY <path>" over stdin)
+        so the model converts it like speech - the TTS-through-AI path.
+        Returns False when the worker can't take it (caller falls back)."""
+        proc = self.proc
+        if proc is None or getattr(proc, "stdin", None) is None:
+            return False
+        try:
+            proc.stdin.write(f"PLAY {wav_path}\n")
+            proc.stdin.flush()
+            return True
+        except Exception:
+            return False
+
     def toggle(self):
         if self.proc is not None:
             self.stop()
@@ -746,6 +812,7 @@ class AiVoice:
         try:
             self.proc = subprocess.Popen(
                 cmd, cwd=str(self.rvc_dir), text=True,
+                stdin=subprocess.PIPE,
                 stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                 creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
         except Exception as e:
@@ -788,6 +855,170 @@ class AiVoice:
         self.status = "off"
         with self.state.lock:
             self.state.ai_mute = False
+
+
+# ----------------------------------------------------------------------------- TTS
+def synth_tts_wav(text, wav_path):
+    """Render text to a wav file with the OS speech engine (blocking).
+    Windows: SAPI via PowerShell. Fallbacks: macOS `say`, else espeak.
+    The text travels over stdin so no shell-quoting issue can arise."""
+    if sys.platform == "win32":
+        path_lit = str(wav_path).replace("'", "''")
+        cmd = ["powershell", "-NoProfile", "-NonInteractive", "-Command",
+               "Add-Type -AssemblyName System.Speech; "
+               "$s = New-Object System.Speech.Synthesis.SpeechSynthesizer; "
+               f"$s.SetOutputToWaveFile('{path_lit}'); "
+               "$s.Speak([Console]::In.ReadToEnd()); $s.Dispose()"]
+    elif sys.platform == "darwin":
+        cmd = ["say", "-o", str(wav_path), "--data-format=LEI16@22050", "-f", "-"]
+    else:
+        cmd = ["espeak", "-w", str(wav_path), "--stdin"]
+    r = subprocess.run(cmd, input=text, text=True, capture_output=True,
+                       timeout=60,
+                       creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+    if r.returncode != 0:
+        detail = (r.stderr or r.stdout or "").strip().splitlines()
+        raise RuntimeError(detail[-1][:80] if detail else "speech engine failed")
+
+
+def tts_synthesize(text):
+    """text -> (mono float32 samples at SAMPLERATE, cached wav path).
+    Synthesized once, then served from tts_cache/ across restarts."""
+    TTS_CACHE_DIR.mkdir(exist_ok=True)
+    wav = TTS_CACHE_DIR / (hashlib.sha1(text.encode("utf-8")).hexdigest()[:16]
+                           + ".wav")
+    if not wav.is_file():
+        try:
+            synth_tts_wav(text, wav)
+        except BaseException:                  # incl. timeout: no half-written wavs
+            wav.unlink(missing_ok=True)
+            raise
+    data, sr = sf.read(str(wav), dtype="float32", always_2d=True)
+    data = data.mean(axis=1)
+    if sr != SAMPLERATE:
+        data = resample_poly(data, SAMPLERATE, sr).astype(np.float32)
+    return data, wav
+
+
+class TTSBank:
+    """Saved text-to-speech phrases: persistence (tts_phrases.json), background
+    synthesis into tts_cache/, and playback routing. With state.tts_fx on the
+    rendered speech joins the mic signal, so the whole effect chain shapes it -
+    and while the AI worker is live it is fed through the worker instead,
+    coming out in the AI voice. With it off the phrase mixes in clean, like a
+    soundboard clip. Either way it also plays on the speakers, so the user
+    hears what was said."""
+
+    def __init__(self, state, player=None, monitor=None, ai=None,
+                 path=TTS_PHRASES_PATH):
+        self.state = state
+        self.player = player
+        self.monitor = monitor
+        self.ai = ai
+        self.path = Path(path)
+        self.phrases = self._load()
+        self.samples = {}             # text -> mono 48k float32
+        self.wav_path = {}            # text -> cached wav (fed to the AI worker)
+        self.status = {}              # text -> "..." | "ready" | "error"
+        self.flash = {}               # row index -> flash-until timestamp
+        self.pending = None           # phrase to auto-play once synthesis lands
+
+    def _load(self):
+        try:
+            data = json.loads(self.path.read_text(encoding="utf-8"))
+            return [str(p)[:TTS_MAX_CHARS] for p in data
+                    if isinstance(p, str) and p.strip()]
+        except (OSError, json.JSONDecodeError, TypeError):
+            return []
+
+    def _save(self):
+        try:
+            self.path.write_text(
+                json.dumps(self.phrases, indent=2, ensure_ascii=False),
+                encoding="utf-8")
+        except OSError as e:
+            self._report(f"TTS: can't save phrases: {e}")
+
+    def _report(self, msg):
+        self.state.status_msg = msg
+        self.state.status_at = time.time()
+
+    def warm(self):
+        """Kick background synthesis for every phrase (startup pre-warm)."""
+        for text in self.phrases:
+            self.ensure(text)
+
+    def ensure(self, text):
+        if self.status.get(text) in ("...", "ready"):
+            return
+        self.status[text] = "..."
+        threading.Thread(target=self._synth_job, args=(text,), daemon=True).start()
+
+    def _synth_job(self, text):
+        try:
+            samples, wav = tts_synthesize(text)
+        except Exception as e:
+            self.status[text] = "error"
+            if self.pending == text:
+                self.pending = None
+            self._report(f"TTS: {str(e)[:70]}")
+            return
+        self.samples[text] = samples
+        self.wav_path[text] = wav
+        self.status[text] = "ready"
+        if self.pending == text:
+            self.pending = None
+            self._route(text)
+
+    def add(self, text):
+        """Save a phrase (whitespace collapsed). True = accepted."""
+        text = " ".join(str(text).split())[:TTS_MAX_CHARS]
+        if not text:
+            return False
+        if text in self.phrases:
+            self._report("TTS: phrase already saved")
+            return False
+        self.phrases.append(text)
+        self._save()
+        self.ensure(text)
+        return True
+
+    def delete(self, i):
+        if not (0 <= i < len(self.phrases)):
+            return
+        text = self.phrases.pop(i)
+        self.flash.clear()             # row indices shifted
+        if self.pending == text:
+            self.pending = None
+        self._save()
+        # cache entries stay: re-adding the phrase later is instant
+
+    def play(self, i):
+        if not (0 <= i < len(self.phrases)):
+            return
+        text = self.phrases[i]
+        self.flash[i] = time.time() + 0.25
+        if self.status.get(text) != "ready":
+            self.pending = text        # auto-plays when synthesis lands
+            self.ensure(text)          # also retries after an earlier error
+            return
+        self._route(text)
+
+    def _route(self, text):
+        samples = self.samples[text]
+        fx = self.state.tts_fx
+        through_ai = False
+        if fx and self.ai is not None and self.ai.proc is not None:
+            through_ai = self.ai.inject(self.wav_path[text])
+        if not through_ai:
+            self.state.events.put(("tts", samples, fx))
+        # local listen, like the soundboard - skipped when self-listen already
+        # mirrors the mic mix (it would be heard doubled). The AI path is never
+        # mirrored (the worker owns the cable), so it always plays locally.
+        mirrored = (self.monitor is not None and self.monitor.on
+                    and not through_ai)
+        if self.player is not None and not mirrored:
+            self.player.play_raw(samples)
 
 
 # ----------------------------------------------------------------------------- INPUT
@@ -894,6 +1125,15 @@ class Menu:
                 "AI character",
                 lambda: ai.voice_name(),
                 adjust=lambda d: ai.cycle(d)))
+        self.items.append(MenuItem(
+            "TTS voice FX",
+            lambda: "ON" if s.tts_fx else "off",
+            select=self._toggle_tts_fx,
+            adjust=lambda d: self._toggle_tts_fx()))
+        self.items.append(MenuItem(
+            "TTS volume",
+            lambda: f"{s.tts_gain:.0%}",
+            adjust=lambda d: s.nudge("tts_gain", d * 0.05)))
         if monitor is not None:
             self.items.append(MenuItem(
                 "Test - hear myself",
@@ -919,6 +1159,10 @@ class Menu:
     def _toggle_radio(self):
         with self.state.lock:
             self.state.radio = not self.state.radio
+
+    def _toggle_tts_fx(self):
+        with self.state.lock:
+            self.state.tts_fx = not self.state.tts_fx
 
     def _toggle_monitor(self):
         self.monitor.toggle()
@@ -949,7 +1193,8 @@ class Menu:
             it.adjust(d)
 
 
-def run_ui(state, stop_flag, dev_line, err_line="", monitor=None, board=None, ai=None):
+def run_ui(state, stop_flag, dev_line, err_line="", monitor=None, board=None,
+           ai=None, tts=None):
     """VoiceBox skin, ported from design/VoiceBox Skin.dc.html.
 
     Faithful to the tokens JSON + motion spec in that file: Space Grotesk for
@@ -1051,6 +1296,8 @@ def run_ui(state, stop_flag, dev_line, err_line="", monitor=None, board=None, ai
 
     menu = Menu(state, stop_flag, monitor, board, ai)
     board = menu.board
+    if tts is None:
+        tts = TTSBank(state, getattr(board, "player", None), monitor, ai)
     kb_action = {a: keys for a, keys in keymap.items()}
 
     def key_action(key):
@@ -1149,8 +1396,17 @@ def run_ui(state, stop_flag, dev_line, err_line="", monitor=None, board=None, ai
     STRIP_Y, STRIP_H = VIEW_TOP + 10, 30
     GRID_TOP = STRIP_Y + STRIP_H + 10
     LIST_RECT = pygame.Rect(0, VIEW_TOP, LEFT_W, VIEW_H)
+    # TTS panel: bottom strip of the right pane (header / input / phrase list)
+    TTS_H = 210
+    TTS_TOP = VIEW_BOT - TTS_H
+    TTS_IN_Y, TTS_IN_H = TTS_TOP + 30, 30
+    TTS_LIST_TOP = TTS_IN_Y + TTS_IN_H + 8
+    TTS_ROW_H, TTS_ROW_GAP = 30, 2
+    TTS_LIST_RECT = pygame.Rect(LEFT_W + 1, TTS_LIST_TOP,
+                                WINDOW_SIZE[0] - LEFT_W - 1,
+                                VIEW_BOT - TTS_LIST_TOP)
     GRID_RECT = pygame.Rect(LEFT_W + 1, GRID_TOP, WINDOW_SIZE[0] - LEFT_W - 1,
-                            VIEW_BOT - GRID_TOP)
+                            TTS_TOP - GRID_TOP)
 
     SECTION_OF = {
         "Preset": "VOICE", "Pitch": "VOICE",
@@ -1159,6 +1415,7 @@ def run_ui(state, stop_flag, dev_line, err_line="", monitor=None, board=None, ai
         "Radio voice": "EFFECTS", "Bass boost": "EFFECTS",
         "Voice volume": "EFFECTS", "Clip volume": "EFFECTS",
         "AI voice": "AI", "AI character": "AI",
+        "TTS voice FX": "TTS", "TTS volume": "TTS",
         "Sounds to mic": "SOUNDS", "Pause sounds": "SOUNDS",
         "Stop all sounds": "SOUNDS",
         "Test - hear myself": "SYSTEM", "Quit": "SYSTEM",
@@ -1196,6 +1453,9 @@ def run_ui(state, stop_flag, dev_line, err_line="", monitor=None, board=None, ai
     # ----------------------------------------------------------- motion state
     list_scroll = list_target = 0.0
     grid_scroll = grid_target = 0.0
+    tts_scroll = tts_target = 0.0
+    tts_text, tts_focus = "", False
+    tts_trunc = {}                # phrase -> truncated display string
     focus_y = float(row_pos.get(menu.sel, LIST_PAD_TOP))
     hover_mix = {}                # element key -> 0..1 hover blend
     nudge = {"i": -1, "at": 0.0, "side": 0}
@@ -1203,6 +1463,7 @@ def run_ui(state, stop_flag, dev_line, err_line="", monitor=None, board=None, ai
     meter_lit = 0.0
     peak_lit, peak_at = 0.0, 0.0
     row_hit, strip_hit, grid_hit = {}, {}, {}
+    tts_row_hit, tts_del_hit, tts_btn_hit = {}, {}, {}
     arrow_hit = None              # (row, "<" rect, ">" rect) from the last draw
     last_t = time.time()
 
@@ -1233,6 +1494,22 @@ def run_ui(state, stop_flag, dev_line, err_line="", monitor=None, board=None, ai
             if r.collidepoint(pos):
                 return i
         return None
+
+    def tts_commit():
+        nonlocal tts_text
+        if tts.add(tts_text):
+            tts_text = ""
+
+    def tts_set_focus(on):
+        """Textbox focus: while on, the keyboard belongs to the textbox."""
+        nonlocal tts_focus
+        if on == tts_focus:
+            return
+        tts_focus = on
+        try:
+            (pygame.key.start_text_input if on else pygame.key.stop_text_input)()
+        except Exception:
+            pass
 
     def go_left():
         menu.on_left()
@@ -1335,6 +1612,20 @@ def run_ui(state, stop_flag, dev_line, err_line="", monitor=None, board=None, ai
             elif event.type == pygame.JOYDEVICEREMOVED:
                 pass                                   # instance dies on its own
 
+            elif event.type == pygame.TEXTINPUT:
+                if tts_focus:
+                    tts_text = (tts_text + event.text)[:TTS_MAX_CHARS]
+
+            elif event.type == pygame.KEYDOWN and tts_focus:
+                # the textbox owns the keyboard: no menu nav, no clip hotkeys
+                held_keys.add(event.key)
+                if event.key == pygame.K_BACKSPACE:
+                    tts_text = tts_text[:-1]
+                elif event.key in (pygame.K_RETURN, pygame.K_KP_ENTER):
+                    tts_commit()
+                elif event.key == pygame.K_ESCAPE:
+                    tts_set_focus(False)
+
             elif event.type == pygame.KEYDOWN:
                 # auto-repeat is only for navigation/adjust; a held clip key must
                 # not stack a new copy of the clip every repeat interval
@@ -1365,13 +1656,18 @@ def run_ui(state, stop_flag, dev_line, err_line="", monitor=None, board=None, ai
                     menu.sel = idx
 
             elif event.type == pygame.MOUSEWHEEL:
-                if pygame.mouse.get_pos()[0] >= LEFT_W:      # over the grid pane
+                mx, my = pygame.mouse.get_pos()
+                if mx >= LEFT_W and my >= TTS_TOP:           # over the TTS panel
+                    tts_target -= event.y * (TTS_ROW_H + TTS_ROW_GAP)
+                elif mx >= LEFT_W:                           # over the grid pane
                     grid_target -= event.y * (TILE_H + GGAP)
                 else:
                     for _ in range(abs(event.y)):
                         menu.on_up() if event.y > 0 else menu.on_down()
 
             elif event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
+                in_r = tts_btn_hit.get("input")
+                tts_set_focus(in_r is not None and in_r.collidepoint(event.pos))
                 hit = next((k for k, r in strip_hit.items()
                             if r.collidepoint(event.pos)), None)
                 if hit is not None:
@@ -1382,8 +1678,21 @@ def run_ui(state, stop_flag, dev_line, err_line="", monitor=None, board=None, ai
                     board.toggle_pause()
                 elif hit == "stop":
                     board.stop()
-                elif (ci := next((c for c, r in grid_hit.items()
+                elif (r := tts_btn_hit.get("add")) is not None \
+                        and r.collidepoint(event.pos):
+                    tts_commit()
+                elif (r := tts_btn_hit.get("fx")) is not None \
+                        and r.collidepoint(event.pos):
+                    menu._toggle_tts_fx()
+                elif (di := next((i for i, r in tts_del_hit.items()
                                   if r.collidepoint(event.pos)), None)) is not None:
+                    tts.delete(di)
+                elif (ti := next((i for i, r in tts_row_hit.items()
+                                  if r.collidepoint(event.pos)), None)) is not None:
+                    tts.play(ti)
+                elif GRID_RECT.collidepoint(event.pos) and (
+                        ci := next((c for c, r in grid_hit.items()
+                                    if r.collidepoint(event.pos)), None)) is not None:
                     board.play(ci)
                 else:
                     idx = row_at(event.pos)
@@ -1694,7 +2003,7 @@ def run_ui(state, stop_flag, dev_line, err_line="", monitor=None, board=None, ai
             grid_hit[ci] = r
 
         screen.blit(grad(GRID_RECT.width - 8, 26, (11, 13, 16, 0), (11, 13, 16, 255)),
-                    (GRID_RECT.x, VIEW_BOT - 26))
+                    (GRID_RECT.x, GRID_RECT.bottom - 26))
         if grid_content_h > GRID_RECT.height:
             track = pygame.Rect(WINDOW_SIZE[0] - 17, GRID_TOP + 4, 3,
                                 GRID_RECT.height - 8)
@@ -1703,6 +2012,198 @@ def run_ui(state, stop_flag, dev_line, err_line="", monitor=None, board=None, ai
             tt_y = track.y + int((track.height - th)
                                  * (grid_scroll / max(1.0, grid_content_h
                                                       - GRID_RECT.height)))
+            pygame.draw.rect(screen, CLR["scrollThumb"],
+                             pygame.Rect(track.x, tt_y, 3, th), border_radius=2)
+        screen.set_clip(None)
+
+        # ------------------------------------------------- right pane: TTS panel
+        pygame.draw.line(screen, CLR["strokeSoft"], (LEFT_W + 1, TTS_TOP),
+                         (WINDOW_SIZE[0], TTS_TOP))
+        tts_btn_hit.clear()
+        hs = TT(f_hdr, "TEXT TO SPEECH", CLR["faint"], 2)
+        screen.blit(hs, (G_X + 4, TTS_TOP + 10))
+        # FX chip: same state as the "TTS voice FX" menu row; reads AI while
+        # the phrase would come out in the AI voice
+        fx_on = state.tts_fx
+        ai_live = ai is not None and ai.proc is not None
+        fx_lab = ("FX: AI" if fx_on and ai_live else
+                  "FX: ON" if fx_on else "FX: OFF")
+        fs = T(f_strip, fx_lab, CLR["accent"] if fx_on else CLR["muted"])
+        fxr = pygame.Rect(G_RIGHT - fs.get_width() - 20 - (10 if fx_on else 0),
+                          TTS_TOP + 6, fs.get_width() + 20 + (10 if fx_on else 0), 22)
+        hm = q8(hover_step(("tts", "fx"), fxr.collidepoint(mouse_pos), dt))
+        if fx_on:
+            screen.blit(grad(fxr.w, fxr.h, ACCENT_TINT[0], ACCENT_TINT[1], 6),
+                        fxr.topleft)
+            pygame.draw.rect(screen, mixc(CLR["bg"], CLR["accent"], 0.45), fxr,
+                             width=1, border_radius=6)
+        else:
+            screen.blit(grad(fxr.w, fxr.h,
+                             mixc(CLR["raisedTop"], CLR["hoverTop"], hm),
+                             mixc(CLR["raisedBot"], CLR["hoverBot"], hm), 6),
+                        fxr.topleft)
+            pygame.draw.rect(screen, mixc(CLR["stroke"], CLR["strokeHover"], hm),
+                             fxr, width=1, border_radius=6)
+        fx_x = fxr.x + 10
+        if fx_on:
+            pygame.draw.circle(screen, CLR["accent"], (fx_x + 2, fxr.centery), 2)
+            fx_x += 10
+        screen.blit(fs, (fx_x, fxr.centery - fs.get_height() // 2))
+        tts_btn_hit["fx"] = fxr
+        lyy = TTS_TOP + 10 + hs.get_height() // 2
+        pygame.draw.line(screen, CLR["strokeSoft"],
+                         (G_X + 4 + hs.get_width() + 8, lyy), (fxr.x - 10, lyy))
+
+        # input box + ADD button
+        in_rect = pygame.Rect(G_X, TTS_IN_Y, G_RIGHT - G_X - 66, TTS_IN_H)
+        add_rect = pygame.Rect(in_rect.right + 8, TTS_IN_Y,
+                               G_RIGHT - in_rect.right - 8, TTS_IN_H)
+        tts_btn_hit["input"] = in_rect
+        tts_btn_hit["add"] = add_rect
+        hm = q8(hover_step(("tts", "input"), in_rect.collidepoint(mouse_pos), dt))
+        screen.blit(grad(in_rect.w, in_rect.h, CLR["headerBot"], CLR["paneLeft"], 7),
+                    in_rect.topleft)
+        pygame.draw.rect(screen,
+                         CLR["accent"] if tts_focus
+                         else mixc(CLR["stroke"], CLR["strokeHover"], hm),
+                         in_rect, width=1, border_radius=7)
+        screen.set_clip(in_rect.inflate(-8, 0))
+        icy = in_rect.centery
+        if tts_text:
+            tsurf = T(f_val, tts_text, CLR["text"])
+            tx0 = in_rect.x + 10 + min(0, in_rect.w - 20 - tsurf.get_width())
+            screen.blit(tsurf, (tx0, icy - tsurf.get_height() // 2))
+            caret_x = tx0 + tsurf.get_width() + 2
+        else:
+            if not tts_focus:
+                ph = T(f_val, "Type a phrase, Enter to save...", CLR["faint"])
+                screen.blit(ph, (in_rect.x + 10, icy - ph.get_height() // 2))
+            caret_x = in_rect.x + 10
+        if tts_focus and (now * 2.0) % 2 < 1:      # blinking caret
+            pygame.draw.line(screen, CLR["accent"],
+                             (caret_x, icy - 8), (caret_x, icy + 8))
+        screen.set_clip(None)
+        can_add = bool(tts_text.strip())
+        hm = q8(hover_step(("tts", "add"), add_rect.collidepoint(mouse_pos), dt))
+        if can_add:
+            pygame.draw.rect(screen, mixc(CLR["accent"], CLR["accentBright"], hm),
+                             add_rect, border_radius=7)
+            asurf = T(f_strip, "ADD", CLR["textOnAccent"])
+        else:
+            screen.blit(grad(add_rect.w, add_rect.h,
+                             mixc(CLR["raisedTop"], CLR["hoverTop"], hm),
+                             mixc(CLR["raisedBot"], CLR["hoverBot"], hm), 7),
+                        add_rect.topleft)
+            pygame.draw.rect(screen, mixc(CLR["stroke"], CLR["strokeHover"], hm),
+                             add_rect, width=1, border_radius=7)
+            asurf = T(f_strip, "ADD", CLR["muted"])
+        screen.blit(asurf, (add_rect.centerx - asurf.get_width() // 2,
+                            add_rect.centery - asurf.get_height() // 2))
+
+        # phrase list (scrollable; click = speak, x = delete)
+        n_ph = len(tts.phrases)
+        tts_content_h = (n_ph * (TTS_ROW_H + TTS_ROW_GAP) - TTS_ROW_GAP + 8
+                         if n_ph else 0)
+        tts_target = max(0.0, min(tts_target,
+                                  max(0.0, tts_content_h - TTS_LIST_RECT.height)))
+        tts_scroll = step(tts_scroll, tts_target, dt, 0.14)
+        screen.set_clip(TTS_LIST_RECT)
+        tts_row_hit.clear()
+        tts_del_hit.clear()
+        tts_playing = {}                   # row -> progress of speaking phrases
+        sample_row = {id(tts.samples[t]): i for i, t in enumerate(tts.phrases)
+                      if t in tts.samples}
+        for v in list(state.tts_voices):
+            try:
+                samples, cur, _fx = v
+            except Exception:
+                continue
+            ri = sample_row.get(id(samples))
+            if ri is not None and len(samples):
+                tts_playing[ri] = max(tts_playing.get(ri, 0.0), cur / len(samples))
+        if not n_ph:
+            hint = T(f_small, "(no phrases - type one above and press Enter)",
+                     CLR["faint"])
+            screen.blit(hint, (G_X, TTS_LIST_TOP + 8))
+        for i in range(n_ph):
+            ry = TTS_LIST_TOP - int(tts_scroll) + i * (TTS_ROW_H + TTS_ROW_GAP)
+            if ry + TTS_ROW_H < TTS_LIST_RECT.y or ry > VIEW_BOT:
+                continue
+            text = tts.phrases[i]
+            r = pygame.Rect(G_X, ry, G_RIGHT - G_X, TTS_ROW_H)
+            fl = tts.flash.get(i, 0) - now
+            f = q8(min(1.0, max(0.0, fl / 0.25)) ** 2) if fl > 0 else 0.0
+            hm = q8(hover_step(("ttsrow", i),
+                               r.collidepoint(mouse_pos)
+                               and TTS_LIST_RECT.collidepoint(mouse_pos), dt))
+            screen.blit(grad(r.w, TTS_ROW_H,
+                             mixc(mixc(CLR["raisedTop"], CLR["hoverTop"], hm),
+                                  CLR["accentDim"], f),
+                             mixc(mixc(CLR["raisedBot"], CLR["hoverBot"], hm),
+                                  CLR["accentDim"], f), 7),
+                        r.topleft)
+            prog = tts_playing.get(i)
+            bcol = mixc(CLR["stroke"], CLR["accentBright"], f)
+            if prog is not None and f < 0.05:
+                bcol = mixc(CLR["raisedTop"], CLR["accent"], 0.45)
+            elif hm > 0.4 and f < 0.05:
+                bcol = CLR["strokeHover"]
+            pygame.draw.rect(screen, bcol, r, width=1, border_radius=7)
+            dr = pygame.Rect(r.right - 8 - 18, r.centery - 9, 18, 18)
+            dh = q8(hover_step(("ttsdel", i), dr.collidepoint(mouse_pos), dt))
+            pygame.draw.rect(screen, mixc(CLR["strokeHover"], CLR["danger"], dh),
+                             dr, width=1, border_radius=5)
+            xs = T(f_badge, "x", CLR["danger"] if dh > 0.4 else CLR["muted"])
+            screen.blit(xs, (dr.centerx - xs.get_width() // 2,
+                             dr.centery - xs.get_height() // 2))
+            tts_del_hit[i] = dr
+            st = tts.status.get(text, "")
+            if st == "ready" and text in tts.samples:
+                dur = T(f_small, f"{len(tts.samples[text]) / SAMPLERATE:.1f}s",
+                        CLR["accent"] if prog is not None else CLR["faint"])
+            elif st == "error":
+                dur = T(f_small, "err", CLR["danger"])
+            else:                          # synthesizing: pulse like "loading"
+                a = 0.4 + 0.6 * (0.5 + 0.5 * float(np.sin(now * 2 * np.pi / 1.2)))
+                dur = T(f_small, "...", mixc(CLR["raisedBot"], CLR["muted"], q8(a)))
+            screen.blit(dur, (dr.x - 8 - dur.get_width(),
+                              r.centery - dur.get_height() // 2))
+            nm = tts_trunc.get(text)
+            if nm is None:
+                if len(tts_trunc) > 400:
+                    tts_trunc.clear()
+                nm, name_w = text, r.w - 104
+                if f_label.render(nm, True, CLR["text"]).get_width() > name_w:
+                    while nm and f_label.render(nm + "...", True,
+                                                CLR["text"]).get_width() > name_w:
+                        nm = nm[:-1]
+                    nm += "..."
+                tts_trunc[text] = nm
+            hot = prog is not None or f > 0.05
+            pygame.draw.polygon(screen,
+                                CLR["accent"] if hot else
+                                (CLR["muted"] if hm > 0.4 else CLR["faint"]),
+                                [(r.x + 12, r.centery - 4),
+                                 (r.x + 12, r.centery + 4), (r.x + 18, r.centery)])
+            ns = T(f_label, nm,
+                   CLR["text"] if (hot or hm > 0.4) else CLR["text2"])
+            screen.blit(ns, (r.x + 26, r.centery - ns.get_height() // 2))
+            if prog is not None:           # speaking: progress along bottom edge
+                pygame.draw.rect(screen, CLR["accent"],
+                                 pygame.Rect(r.x, r.bottom - 2,
+                                             max(2, int(r.w * min(1.0, prog))), 2))
+            tts_row_hit[i] = r
+        screen.blit(grad(TTS_LIST_RECT.width - 8, 20, (11, 13, 16, 0),
+                         (11, 13, 16, 255)),
+                    (TTS_LIST_RECT.x, VIEW_BOT - 20))
+        if tts_content_h > TTS_LIST_RECT.height:
+            track = pygame.Rect(WINDOW_SIZE[0] - 17, TTS_LIST_TOP + 2, 3,
+                                TTS_LIST_RECT.height - 4)
+            pygame.draw.rect(screen, CLR["scrollTrack"], track, border_radius=2)
+            th = max(18, int(track.height * TTS_LIST_RECT.height / tts_content_h))
+            tt_y = track.y + int((track.height - th)
+                                 * (tts_scroll / max(1.0, tts_content_h
+                                                     - TTS_LIST_RECT.height)))
             pygame.draw.rect(screen, CLR["scrollThumb"],
                              pygame.Rect(track.x, tt_y, 3, th), border_radius=2)
         screen.set_clip(None)
@@ -1801,12 +2302,16 @@ def main():
     player = LocalPlayer(state)
     board = Board(state, player, monitor)
     ai = AiVoice(state)
+    tts = TTSBank(state, player, monitor, ai)
+    tts.warm()                    # synthesize saved phrases in the background
     try:
         if stream:
             with stream:
-                run_ui(state, stop_flag, dev_line, err_line, monitor, board, ai)
+                run_ui(state, stop_flag, dev_line, err_line, monitor, board,
+                       ai, tts)
         else:
-            run_ui(state, stop_flag, dev_line, err_line, monitor, board, ai)
+            run_ui(state, stop_flag, dev_line, err_line, monitor, board,
+                   ai, tts)
     except KeyboardInterrupt:
         pass
     finally:

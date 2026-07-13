@@ -11,5 +11,9 @@ dist/
 sounds/*
 !sounds/.gitkeep
 
+# TTS - personal phrases + rendered speech cache stay local
+tts_phrases.json
+tts_cache/
+
 # logs / local junk
 *.log

@@ -24,6 +24,13 @@ real mic --> [VoiceBox: pitch/effects/soundboard | or RVC AI voice] --> VB-CABLE
   `weights/*.pth` models; VoiceBox runs `rvc_worker.py` on RVC's own bundled
   CUDA Python and pipes the converted voice into the cable. Pick the
   character from the menu; the soundboard keeps working on top.
+- **Text to speech** - type a phrase in the panel under the soundboard and
+  press Enter to save it; saved phrases live in a scrollable list (click to
+  speak into the mic, `x` to delete) and persist in `tts_phrases.json`.
+  With "TTS voice FX" on, the speech goes through the same pitch/effect
+  chain as your voice - and through the AI voice while the worker is live;
+  toggle it off for clean TTS. Speech is rendered once with the Windows
+  voice (SAPI) and cached in `tts_cache/`.
 - **Test - hear myself** self-listen, live mic meter with peak-hold,
   keyboard + mouse + game controller navigation, remappable controls
   (`controls.json`), crash-proof against malformed config.
@@ -52,9 +59,10 @@ without changing anything.
 
 ## Tests
 
-`python tests/run_all.py` - five suites, 100+ checks, headless (no audio
+`python tests/run_all.py` - six suites, 100+ checks, headless (no audio
 hardware or window needed): DSP effects math, routing/pause/stop semantics,
-preset behavior, AI worker lifecycle, and simulated keyboard/mouse UI runs.
+preset behavior, AI worker lifecycle, TTS phrases, and simulated
+keyboard/mouse UI runs.
 
 ## Project layout
 
@@ -64,6 +72,8 @@ rvc_worker.py     headless RVC realtime worker (runs on RVC's runtime python)
 VoiceBox.bat      run-from-source launcher (auto-installs deps)
 controls.json     input bindings (delete to restore defaults)
 sounds/           your soundboard clips (not committed)
+tts_phrases.json  your saved TTS phrases (not committed)
+tts_cache/        rendered TTS audio, rebuilt on demand (not committed)
 assets/fonts/     bundled UI fonts (Space Grotesk, JetBrains Mono)
 design/           UI skin spec (tokens + mockup) the interface is ported from
 setup/            VoiceBoxSetup.exe bootstrapper source + build script
