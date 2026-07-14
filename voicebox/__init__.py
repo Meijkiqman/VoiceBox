@@ -80,14 +80,15 @@ import numpy as np
 import sounddevice as sd
 import soundfile as sf
 
-from . import (aivoice, app, audio, config, controls, dsp, soundboard, state,
-               tts, ui)
+from . import (aivoice, app, audio, config, controls, cues, dsp, soundboard,
+               state, tts, ui)
 from .config import *          # noqa: F401,F403 - flat API kept for tests
 from .dsp import *             # noqa: F401,F403
 from .soundboard import *      # noqa: F401,F403
 from .state import *           # noqa: F401,F403
 from .audio import *           # noqa: F401,F403
 from .aivoice import *         # noqa: F401,F403
+from .cues import *            # noqa: F401,F403
 from .tts import *             # noqa: F401,F403
 from .controls import *        # noqa: F401,F403
 from .ui import *              # noqa: F401,F403

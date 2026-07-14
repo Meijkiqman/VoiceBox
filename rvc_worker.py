@@ -16,6 +16,9 @@ so the model speaks them in the AI voice (the TTS-through-AI path).
 "MONITOR 1" / "MONITOR 0" on stdin (or --monitor at launch) mirrors the
 converted voice to the default speakers - the self-listen ("hear myself")
 path while the AI owns the voice.
+"PITCH <n>" on stdin (or --pitch at launch) transposes the voice going into
+the model by n semitones - the usual way to reach characters far from your
+own register (e.g. +12 for female voices).
 "FX 1" / "FX 0" on stdin (or --fx at launch) switches the output routing:
 instead of writing to the output device, converted blocks are streamed to
 VoiceBox over a localhost socket (--fx-port, handshake = 4-byte LE sample
@@ -206,6 +209,14 @@ if __name__ == "__main__":
                 if line.startswith("FX"):
                     fx["on"] = line.split()[-1] in ("1", "on")
                     print(f"STATUS fx {'on' if fx['on'] else 'off'}", flush=True)
+                    continue
+                if line.startswith("PITCH"):
+                    # live transpose: RVC reads f0_up_key on every inference
+                    try:
+                        rvc.f0_up_key = int(float(line.split()[-1]))
+                        print(f"STATUS pitch {rvc.f0_up_key}", flush=True)
+                    except (ValueError, IndexError):
+                        pass
                     continue
                 if not line.startswith("PLAY "):
                     continue

@@ -223,6 +223,18 @@ class AiVoice:
         except Exception:
             pass
 
+    def set_pitch(self, semis):
+        """Live-transpose the voice going into the model (the AI pitch row).
+        No worker restart needed: RVC reads the key on every inference."""
+        proc = self.proc
+        if proc is None or getattr(proc, "stdin", None) is None:
+            return
+        try:
+            proc.stdin.write(f"PITCH {int(semis)}\n")
+            proc.stdin.flush()
+        except Exception:
+            pass
+
     def set_fx(self, on):
         """Live-switch the routing: on = the worker streams the converted
         voice through VoiceBox's effect chain (the "AI voice FX" row), off =
@@ -258,6 +270,8 @@ class AiVoice:
         cmd = [str(self.rvc_dir / "runtime" / "python.exe"),
                str(BASE_DIR / "rvc_worker.py"),
                "--pth", str(pth), "--output-device", str(out_match)]
+        if int(self.state.ai_pitch):
+            cmd += ["--pitch", str(int(self.state.ai_pitch))]
         index = self._index_for(pth)
         if index:
             cmd += ["--index", index]
@@ -293,6 +307,8 @@ class AiVoice:
                 line = line.strip()
                 if line.startswith("STATUS running"):
                     self.status = "ON"
+                    if self.state.cues is not None:
+                        self.state.cues.ai_ready()
                 elif line.startswith("STATUS error"):
                     self.status = "error"
                     self.state.status_msg = f"AI: {line[13:][:70]}"
@@ -303,6 +319,8 @@ class AiVoice:
             self.proc = None
             if self.status != "error":
                 self.status = "off"
+            if self.state.cues is not None:
+                self.state.cues.ai_died()
             with self.state.lock:
                 self.state.ai_mute = False
 

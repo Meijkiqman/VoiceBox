@@ -143,6 +143,13 @@ class Menu:
                 lambda: ai.voice_name(),
                 adjust=lambda d: ai.cycle(d)))
             self.items.append(MenuItem(
+                "AI pitch",
+                lambda: f"{s.ai_pitch:+.0f} st" if s.ai_pitch else "off",
+                select=lambda: self._set_ai_pitch(0),
+                adjust=lambda d: self._set_ai_pitch(s.ai_pitch + d),
+                slider=(lambda: s.ai_pitch, self._set_ai_pitch,
+                        -24, 24, "st")))
+            self.items.append(MenuItem(
                 "AI voice FX",
                 lambda: "ON" if s.ai_fx else "off",
                 select=self._toggle_ai_fx,
@@ -185,6 +192,11 @@ class Menu:
                 lambda: "ON" if hotkeys.on else "off",
                 select=hotkeys.toggle,
                 adjust=lambda d: hotkeys.toggle()))
+        self.items.append(MenuItem(
+            "Sound cues",
+            lambda: "ON" if s.cues_on else "off",
+            select=self._toggle_cues,
+            adjust=lambda d: self._toggle_cues()))
         if engine is not None:
             self.items.append(MenuItem(
                 "Input device",
@@ -212,6 +224,8 @@ class Menu:
     def toggle_mute(self):
         with self.state.lock:
             self.state.mic_muted = not self.state.mic_muted
+        if self.state.cues is not None:
+            self.state.cues.mute(self.state.mic_muted)
 
     def _save_preset(self):
         name = self.state.save_user_preset()
@@ -248,6 +262,19 @@ class Menu:
             self.state.ai_fx = not self.state.ai_fx
         if self.ai is not None:
             self.ai.set_fx(self.state.ai_fx)
+
+    def _set_ai_pitch(self, v):
+        """Transpose into the RVC model; applies live to a running worker."""
+        with self.state.lock:
+            self.state.ai_pitch = float(max(-24, min(24, int(round(v)))))
+        if self.ai is not None:
+            self.ai.set_pitch(int(self.state.ai_pitch))
+
+    def _toggle_cues(self):
+        with self.state.lock:
+            self.state.cues_on = not self.state.cues_on
+        if self.state.cues is not None and self.state.cues_on:
+            self.state.cues.mute(self.state.mic_muted)   # sample the sound
 
     def _tts_voice_label(self):
         v = self.state.tts_voice
@@ -557,12 +584,14 @@ def run_ui(state, stop_flag, dev_line, err_line="", monitor=None, board=None,
         "Grit / growl": "EFFECTS", "Reverb": "EFFECTS", "Echo": "EFFECTS",
         "Radio voice": "EFFECTS", "Bass boost": "EFFECTS",
         "Voice volume": "EFFECTS", "Clip volume": "EFFECTS",
-        "AI voice": "AI", "AI character": "AI", "AI voice FX": "AI",
+        "AI voice": "AI", "AI character": "AI", "AI pitch": "AI",
+        "AI voice FX": "AI",
         "TTS voice FX": "TTS", "TTS volume": "TTS",
         "TTS voice": "TTS", "TTS rate": "TTS",
         "Sounds to mic": "SOUNDS", "Pause sounds": "SOUNDS",
         "Stop all sounds": "SOUNDS", "Rescan sounds": "SOUNDS",
         "Record output": "SYSTEM", "Global hotkeys": "SYSTEM",
+        "Sound cues": "SYSTEM",
         "Input device": "DEVICES", "Output device": "DEVICES",
         "Quit": "SYSTEM",
     }

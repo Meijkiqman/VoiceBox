@@ -7,6 +7,7 @@ import sounddevice as sd
 from .aivoice import AiVoice
 from .audio import AudioEngine, LocalPlayer, Monitor, Recorder
 from .controls import GlobalHotkeys
+from .cues import Cues
 from .soundboard import Board
 from .state import State, load_settings, save_settings, settings_autosave
 from .tts import TTSBank
@@ -28,6 +29,7 @@ def main():
     monitor = Monitor(state,
                       has_main_stream=lambda: engine.stream is not None)
     player = LocalPlayer(state)
+    state.cues = Cues(state, player)
     board = Board(state, player, monitor)
     ai = AiVoice(state, monitor=monitor)
     tts = TTSBank(state, player, monitor, ai)

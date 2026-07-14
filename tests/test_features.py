@@ -117,12 +117,34 @@ check("settings rows in order",
                  "Robot voice", "Helmet doubler",
                  "Grit / growl", "Reverb", "Echo", "Radio voice", "Bass boost",
                  "Voice volume", "Clip volume", "TTS voice FX", "TTS volume",
-                 "Sounds to mic", "Pause sounds",
+                 "Sound cues", "Sounds to mic", "Pause sounds",
                  "Stop all sounds", "Rescan sounds", "Quit"],
       str(labels))
 menu_nomon = voicebox.Menu(state, stop_flag)   # hear-myself lives in the strip
 check("menu rows identical without monitor",
       [it.label for it in menu_nomon.items] == labels)
+
+# --------------------------------------------------------------- sound cues
+class CuePlayer:
+    def __init__(self): self.played = []
+    def play_raw(self, s): self.played.append(s)
+
+cue_player = CuePlayer()
+state.cues = voicebox.Cues(state, cue_player)
+menu.toggle_mute()                      # mute -> low blip
+menu.toggle_mute()                      # live -> high blip
+check("mute toggles fire sound cues", len(cue_player.played) == 2)
+check("cue tones are gentle float32",
+      cue_player.played[0].dtype == np.float32
+      and float(np.abs(cue_player.played[0]).max()) <= 0.25)
+with state.lock:
+    state.cues_on = False
+menu.toggle_mute()
+check("Sound cues off silences the blips", len(cue_player.played) == 2)
+menu.toggle_mute()                      # leave the mic live again
+with state.lock:
+    state.cues_on = True
+state.cues = None
 
 # ------------------------------------------------------- UI smoke incl. mouse
 import pygame

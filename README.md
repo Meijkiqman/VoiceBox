@@ -33,10 +33,12 @@ real mic --> [VoiceBox: pitch/effects/soundboard | or RVC AI voice] --> VB-CABLE
 - **AI voice** - the `rvc/` folder holds a trimmed RVC-beta package with
   `weights/*.pth` voice models; VoiceBox runs `rvc_worker.py` on RVC's own
   bundled CUDA Python and pipes the converted voice into the cable. Pick the
-  character from the menu; the soundboard keeps working on top. The
-  "AI voice FX" row routes the converted voice through VoiceBox's own
-  effect chain (pitch, echo, reverb, ...) - and therefore through HEAR
-  self-listen - instead of feeding the cable dry. (To use a package
+  character from the menu; "AI pitch" transposes your voice going into the
+  model (live, no restart - e.g. +12 to reach female characters), and the
+  soundboard keeps working on top. The "AI voice FX" row routes the
+  converted voice through VoiceBox's own effect chain (pitch, echo,
+  reverb, ...) - and therefore through HEAR self-listen - instead of
+  feeding the cable dry. (To use a package
   elsewhere, set `"rvc_dir"` in `settings.json` or change `RVC_DIR` in
   `voicebox/config.py`.)
 - **Text to speech** - type a phrase in the panel under the soundboard
@@ -64,6 +66,10 @@ real mic --> [VoiceBox: pitch/effects/soundboard | or RVC AI voice] --> VB-CABLE
 - **Record output** - one menu toggle writes the processed mix (voice +
   effects + soundboard + TTS) to `recordings/*.wav`, handy for testing
   presets or keeping funny moments.
+- **Sound cues** - short self-heard blips (speakers only, never the cable)
+  when the AI voice finishes loading or dies mid-game, and on mute/unmute -
+  so you never talk into a dead mic while alt-tabbed. Toggleable from the
+  SYSTEM menu; push-to-talk stays silent.
 - **Hear myself** self-listen toggle in the soundboard strip (next to
   Pause/Stop) - mirrors the processed mix to your speakers, including the
   converted AI voice while the RVC worker is live. Live mic meter with

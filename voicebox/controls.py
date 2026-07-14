@@ -64,6 +64,8 @@ class GlobalHotkeys:
     def _toggle_mute(self):
         with self.state.lock:
             self.state.mic_muted = not self.state.mic_muted
+        if self.state.cues is not None:    # manual toggle only - PTT stays
+            self.state.cues.mute(self.state.mic_muted)   # silent (_set_mute)
 
     def _set_mute(self, muted):
         with self.state.lock:

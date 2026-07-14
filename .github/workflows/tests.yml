@@ -1,0 +1,22 @@
+# Runs the full VoiceBox suite headless: SDL's dummy drivers stand in for a
+# window, and the tests are written to tolerate a machine with no audio
+# devices (stream opens either succeed or surface an error string).
+name: tests
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  tests:
+    runs-on: windows-latest   # matches the target platform (SAPI TTS, paths)
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: pip install -r requirements.txt
+      - run: python tests/run_all.py
+        env:
+          SDL_VIDEODRIVER: dummy
+          SDL_AUDIODRIVER: dummy

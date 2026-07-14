@@ -69,9 +69,16 @@ class FakeProc:
         self.terminated = True
         self.stdout.q.put(None)          # EOF, like a real dying process
 
+class CueRec:
+    def __init__(self): self.calls = []
+    def ai_ready(self): self.calls.append("ready")
+    def ai_died(self): self.calls.append("died")
+    def mute(self, m): self.calls.append(("mute", m))
+
 real_popen = voicebox.subprocess.Popen
 voicebox.subprocess.Popen = FakeProc
 try:
+    state.cues = CueRec()
     ai.start()
     check("start launches worker with model + index",
           "--pth" in FakeProc.last.cmd and "--index" in FakeProc.last.cmd
@@ -82,6 +89,7 @@ try:
     FakeProc.last.stdout.q.put("STATUS running sr=40000 block=14000\n")
     time.sleep(0.3)
     check("worker running -> status ON", ai.status == "ON")
+    check("worker ready fires the ready cue", "ready" in state.cues.calls)
 
     running = FakeProc.last
     ai.stop()
@@ -99,6 +107,10 @@ try:
     check("worker death -> unmuted", state.ai_mute is False and ai.proc is None)
     check("worker error surfaces in status line",
           state.status_msg.startswith("AI:"))
+    check("worker death fires the died cue", "died" in state.cues.calls)
+    check("clean stop fired no died cue",
+          state.cues.calls.count("died") == 1)
+    state.cues = None
     ai.status = "off"
 
     # no-index voice: --index must be absent
@@ -139,6 +151,24 @@ try:
     ai_fx.stop()
     with state.lock:
         state.ai_fx = False
+
+    # ---- AI pitch: --pitch at launch, "PITCH n" live ---------------------
+    with state.lock:
+        state.ai_pitch = -5.0
+    ai_p = voicebox.AiVoice(state, rvc_dir=root)
+    ai_p.start()
+    check("AI pitch handed to the worker at launch",
+          "--pitch" in FakeProc.last.cmd and "-5" in FakeProc.last.cmd)
+    ai_p.set_pitch(3)
+    check("live AI pitch reaches the worker",
+          "PITCH 3\n" in FakeProc.last.stdin.getvalue())
+    ai_p.stop()
+    with state.lock:
+        state.ai_pitch = 0.0
+    ai_zero = voicebox.AiVoice(state, rvc_dir=root)
+    ai_zero.start()
+    check("zero AI pitch omits --pitch", "--pitch" not in FakeProc.last.cmd)
+    ai_zero.stop()
 finally:
     voicebox.subprocess.Popen = real_popen
 
@@ -214,7 +244,7 @@ menu = voicebox.Menu(state, threading.Event(), None, None, ai)
 labels = [it.label for it in menu.items]
 check("AI rows present when available",
       "AI voice" in labels and "AI character" in labels
-      and "AI voice FX" in labels)
+      and "AI pitch" in labels and "AI voice FX" in labels)
 check("AI rows ordered before Sounds to mic",
       labels.index("AI voice") < labels.index("Sounds to mic"))
 menu_no_ai = voicebox.Menu(state, threading.Event())
