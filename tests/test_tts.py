@@ -229,19 +229,34 @@ def poke():
     post(pygame.event.Event(pygame.MOUSEBUTTONDOWN, button=1, pos=(920, 501)))
     time.sleep(0.15)
     snaps.append(list(ui_bank.phrases))               # after delete
+    # Ctrl+V pastes the (stubbed) clipboard into the box, Enter saves it
+    post(pygame.event.Event(pygame.MOUSEBUTTONDOWN, button=1, pos=(500, 462)))
+    time.sleep(0.15)
+    post(pygame.event.Event(pygame.KEYDOWN, key=pygame.K_v,
+                            mod=pygame.KMOD_CTRL))
+    time.sleep(0.1)
+    post(pygame.event.Event(pygame.KEYDOWN, key=pygame.K_RETURN))
+    time.sleep(0.3)
+    snaps.append(list(ui_bank.phrases))               # after paste + save
     post(pygame.event.Event(pygame.QUIT))
 
 
+real_clip = voicebox.ui.get_clipboard_text
+voicebox.ui.get_clipboard_text = lambda: "pasted from clipboard"
 threading.Thread(target=poke, daemon=True).start()
 ui_error = []
 try:
     voicebox.run_ui(ui_state, stop_flag, "dev", "", None, None, None, ui_bank)
 except Exception as e:
     ui_error.append(e)
+finally:
+    voicebox.ui.get_clipboard_text = real_clip
 check("UI with TTS panel survives", not ui_error,
       repr(ui_error[0]) if ui_error else "")
 check("typed phrase was saved via the panel", snaps and snaps[0] == ["hi there"])
-check("row x deleted the phrase", len(snaps) == 2 and snaps[1] == [])
+check("row x deleted the phrase", len(snaps) >= 2 and snaps[1] == [])
+check("Ctrl+V pasted the clipboard into the box",
+      len(snaps) == 3 and snaps[2] == ["pasted from clipboard"], str(snaps))
 
 tts_events, int_events = [], []
 while not ui_state.events.empty():

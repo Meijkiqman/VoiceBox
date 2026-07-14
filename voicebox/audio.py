@@ -32,6 +32,7 @@ def make_callback(state):
             reverb, echo, radio = state.reverb, state.echo, state.radio
             doubler, bass = state.doubler, state.bass
             ai_mute, tts_gain = state.ai_mute, state.tts_gain
+            ai_fx = state.ai_fx
             mic_muted = state.mic_muted
             gate_on, gate_db = state.gate_on, state.gate_db
 
@@ -65,20 +66,30 @@ def make_callback(state):
                     still.append([samples, cur + frames, fx])
             state.tts_voices = still
 
+        # x = the chain input; None = the voice path stays fully silent
         if ai_mute:
-            # the RVC worker feeds the converted voice into the cable itself;
-            # our own voice path stays silent so it isn't heard doubled
+            # the RVC worker owns the voice. With "AI voice FX" on, its
+            # converted audio comes back over the local bridge and runs
+            # through the chain like mic speech; otherwise the worker feeds
+            # the cable itself and our voice path stays silent (not doubled).
+            feed = state.ai_feed
+            if ai_fx and feed is not None:
+                x = feed.read(frames) * voice_gain   # worker gates its own mic
+            else:
+                x = None
+        elif mic_muted:
+            # muted: the voice drops out but fx-tagged TTS still rides the
+            # chain, so saved phrases remain usable as a stand-in voice
+            x = np.zeros(frames, dtype=np.float32)
+        else:
+            x = indata[:, 0].astype(np.float32) * voice_gain
+            if gate_on:                    # gate the mic only, never the TTS
+                x = state.gate_fx.process(x, gate_db)
+
+        if x is None:
             y = np.zeros(frames, dtype=np.float32)
             carry = np.zeros(0, dtype=np.float32)
         else:
-            # muted: the voice drops out but fx-tagged TTS still rides the
-            # chain, so saved phrases remain usable as a stand-in voice
-            if mic_muted:
-                x = np.zeros(frames, dtype=np.float32)
-            else:
-                x = indata[:, 0].astype(np.float32) * voice_gain
-                if gate_on:                # gate the mic only, never the TTS
-                    x = state.gate_fx.process(x, gate_db)
             if tts_pre is not None:
                 x = x + tts_pre * tts_gain
             y = state.shifter.process(x)
@@ -424,7 +435,9 @@ class Recorder:
     callback mirrors its output into a queue (state.record_q, same pattern
     as self-listen) and a writer thread drains it to disk, so the callback
     never touches I/O. While the AI voice is live the worker owns the cable,
-    so a recording captures only VoiceBox's own mix (soundboard + TTS)."""
+    so a recording captures only VoiceBox's own mix (soundboard + TTS) -
+    unless "AI voice FX" is on, which routes the converted voice through
+    VoiceBox's chain, so it is captured too."""
 
     def __init__(self, state, folder=RECORDINGS_DIR):
         self.state = state

@@ -27,6 +27,7 @@ PERSIST_FIELDS = {
     "radio":        bool,
     "gate_on":      bool,
     "tts_fx":       bool,
+    "ai_fx":        bool,
     "clips_to_mic": bool,
     # str = device/path name or None (None -> the defaults at the top of
     # this file). Persisting names, not indexes: indexes shift across boots.
@@ -104,6 +105,8 @@ class State:
         self.tts_voice = None         # engine voice name; None = OS default
         self.tts_rate = 0.0           # SAPI -10..10 speaking rate
         self.ai_mute = False          # AI worker owns the voice; mute ours
+        self.ai_fx = False            # AI voice through the effect chain
+        self.ai_feed = None           # AiFeed bridge while RVC is available
         self.input_device = None      # device name; None = INPUT_DEVICE_MATCH
         self.output_device = None     # device name; None = OUTPUT_DEVICE_MATCH
         self.rvc_dir = None           # RVC package path; None = RVC_DIR

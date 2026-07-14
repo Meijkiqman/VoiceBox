@@ -16,6 +16,11 @@ so the model speaks them in the AI voice (the TTS-through-AI path).
 "MONITOR 1" / "MONITOR 0" on stdin (or --monitor at launch) mirrors the
 converted voice to the default speakers - the self-listen ("hear myself")
 path while the AI owns the voice.
+"FX 1" / "FX 0" on stdin (or --fx at launch) switches the output routing:
+instead of writing to the output device, converted blocks are streamed to
+VoiceBox over a localhost socket (--fx-port, handshake = 4-byte LE sample
+rate, then raw float32 mono), so the AI voice runs through VoiceBox's own
+effect chain (pitch, echo, reverb, ...) before reaching the cable.
 --selftest converts a few synthetic blocks and reports timing instead of
 opening audio devices.
 """
@@ -40,6 +45,12 @@ def parse_args():
     ap.add_argument("--monitor", action="store_true",
                     help="also mirror the converted voice to the default "
                          "speakers (self-listen)")
+    ap.add_argument("--fx-port", type=int, default=0,
+                    help="VoiceBox effect-bridge port; converted audio is "
+                         "streamed there while FX routing is on")
+    ap.add_argument("--fx", action="store_true",
+                    help="start with FX routing on (audio to --fx-port "
+                         "instead of the output device)")
     ap.add_argument("--selftest", action="store_true")
     return ap.parse_args()
 
@@ -157,12 +168,44 @@ if __name__ == "__main__":
                     break
         print(f"STATUS monitor {'on' if on else 'off'}", flush=True)
 
+    # ---- FX routing (AI voice through VoiceBox's effect chain) --------------
+    # While on, converted blocks go to VoiceBox over a localhost socket (it
+    # runs them through pitch/echo/reverb and owns the cable); the output
+    # device gets silence so the voice isn't heard doubled. A sender thread
+    # keeps socket I/O out of the audio callback.
+    fx = {"on": args.fx, "sock": None}
+    fx_q = _queue.Queue(maxsize=8)
+
+    def _fx_sender(sock):
+        try:
+            while True:
+                sock.sendall(fx_q.get().tobytes())
+        except Exception:
+            fx["sock"] = None            # bridge died: fall back to the device
+
+    def _fx_connect():
+        if not args.fx_port:
+            return
+        import socket as _socket
+        try:
+            s = _socket.create_connection(("127.0.0.1", args.fx_port), timeout=3)
+            s.setsockopt(_socket.IPPROTO_TCP, _socket.TCP_NODELAY, 1)
+            s.sendall(int(sr).to_bytes(4, "little"))     # handshake: our rate
+            fx["sock"] = s
+            threading.Thread(target=_fx_sender, args=(s,), daemon=True).start()
+        except Exception as e:
+            print(f"STATUS error fx bridge {e}", flush=True)
+
     def _stdin_listener():
         try:
             for line in sys.stdin:
                 line = line.strip()
                 if line.startswith("MONITOR"):
                     set_monitor(line.split()[-1] in ("1", "on"))
+                    continue
+                if line.startswith("FX"):
+                    fx["on"] = line.split()[-1] in ("1", "on")
+                    print(f"STATUS fx {'on' if fx['on'] else 'off'}", flush=True)
                     continue
                 if not line.startswith("PLAY "):
                     continue
@@ -247,7 +290,14 @@ if __name__ == "__main__":
     def callback(indata, outdata, frames, times, status):
         try:
             out = process(indata)
-            outdata[:] = np.tile(out, (2, 1)).T
+            if fx["on"] and fx["sock"] is not None:
+                outdata[:] = 0               # VoiceBox owns the cable now
+                try:
+                    fx_q.put_nowait(out.copy())
+                except _queue.Full:
+                    pass                     # bridge lagging: drop, never block
+            else:
+                outdata[:] = np.tile(out, (2, 1)).T
             if mon["stream"] is not None:    # mirror to the self-listen stream
                 try:
                     mon_q.put_nowait(out.copy())
@@ -261,6 +311,7 @@ if __name__ == "__main__":
         threading.Thread(target=_stdin_listener, daemon=True).start()
     if args.monitor:
         set_monitor(True)
+    _fx_connect()
 
     print(f"STATUS running sr={sr} block={block_frame} device={device}", flush=True)
     try:

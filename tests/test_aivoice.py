@@ -119,6 +119,26 @@ try:
     check("HEAR toggle reaches the live worker",
           FakeProc.last.stdin.getvalue() == "MONITOR 0\n")
     ai_mon.stop()
+
+    # ---- AI voice FX routing (worker -> VoiceBox effect chain) ----------
+    check("fx bridge port handed to the worker",
+          "--fx-port" in FakeProc.last.cmd)
+    check("fx off omits --fx", "--fx" not in FakeProc.last.cmd)
+    with state.lock:
+        state.ai_fx = True
+    ai_fx = voicebox.AiVoice(state, rvc_dir=root, monitor=FakeMon())
+    ai_fx.start()
+    check("fx on adds --fx at launch", "--fx" in FakeProc.last.cmd)
+    check("fx on suppresses the worker-side monitor",
+          "--monitor" not in FakeProc.last.cmd)
+    ai_fx.set_fx(False)
+    check("FX toggle reaches the live worker",
+          "FX 0\n" in FakeProc.last.stdin.getvalue())
+    check("self-listen handed back to the worker when FX goes off",
+          FakeProc.last.stdin.getvalue().endswith("MONITOR 1\n"))
+    ai_fx.stop()
+    with state.lock:
+        state.ai_fx = False
 finally:
     voicebox.subprocess.Popen = real_popen
 
@@ -142,12 +162,59 @@ with state.lock:
 cb(sine, out, frames, None, None)
 check("unmute restores the voice path", np.abs(out).max() > 0.1)
 
+# ------------------------------------- AI voice through the effect chain
+class StubFeed:
+    def read(self, n):
+        return np.full(n, 0.25, dtype=np.float32)
+
+state.ai_feed = StubFeed()
+with state.lock:
+    state.ai_mute = True
+    state.ai_fx = True
+cb(sine, out, frames, None, None)
+check("AI voice FX feeds the chain while muted", np.abs(out).max() > 0.2,
+      f"peak={np.abs(out).max():.3f}")
+with state.lock:
+    state.ai_fx = False
+cb(sine, out, frames, None, None)
+check("FX off keeps the muted voice path silent", np.abs(out).max() == 0.0)
+with state.lock:
+    state.ai_mute = False
+state.ai_feed = None
+
+# ---------------------------------------------- AI voice FX bridge (AiFeed)
+import socket as _socket
+feed = voicebox.AiFeed(state)
+cli = _socket.create_connection(("127.0.0.1", feed.port), timeout=3)
+cli.sendall((24000).to_bytes(4, "little"))          # half the engine rate
+tone = (0.5 * np.sin(2 * np.pi * 220 * np.arange(24000) / 24000)
+        ).astype(np.float32)
+cli.sendall(tone.tobytes())
+got, deadline = 0, time.time() + 3
+while time.time() < deadline:
+    with feed.lock:
+        got = len(feed.buf)
+    if got >= 40000:
+        break
+    time.sleep(0.05)
+check("bridge receives + resamples to the engine rate", got >= 40000,
+      f"{got} samples")
+blk = feed.read(4096)
+check("bridge read hands out the converted voice",
+      float(np.abs(blk).max()) > 0.3, f"peak={float(np.abs(blk).max()):.3f}")
+for _ in range(64):                        # drain past the end: must zero-pad
+    blk = feed.read(4096)
+check("bridge underrun pads with silence", float(np.abs(blk).max()) == 0.0)
+cli.close()
+feed.close()
+
 # ------------------------------------------------------------------ menu rows
 import threading
 menu = voicebox.Menu(state, threading.Event(), None, None, ai)
 labels = [it.label for it in menu.items]
 check("AI rows present when available",
-      "AI voice" in labels and "AI character" in labels)
+      "AI voice" in labels and "AI character" in labels
+      and "AI voice FX" in labels)
 check("AI rows ordered before Sounds to mic",
       labels.index("AI voice") < labels.index("Sounds to mic"))
 menu_no_ai = voicebox.Menu(state, threading.Event())

@@ -9,6 +9,23 @@ from .controls import build_keymap, load_controls
 from .soundboard import Board
 from .tts import TTSBank
 
+def get_clipboard_text():
+    """OS clipboard -> str ('' when empty or unavailable). Tk ships with
+    CPython and needs no visible window; created per call - paste is rare.
+    Newlines/tabs collapse to spaces so a paste stays a one-line phrase."""
+    try:
+        import tkinter
+        root = tkinter.Tk()
+        root.withdraw()
+        try:
+            text = root.clipboard_get()
+        finally:
+            root.destroy()
+    except Exception:
+        return ""
+    return " ".join(str(text).split())
+
+
 class MenuItem:
     def __init__(self, label, value_fn=None, select=None, adjust=None, flash=True,
                  slider=None):
@@ -125,6 +142,11 @@ class Menu:
                 "AI character",
                 lambda: ai.voice_name(),
                 adjust=lambda d: ai.cycle(d)))
+            self.items.append(MenuItem(
+                "AI voice FX",
+                lambda: "ON" if s.ai_fx else "off",
+                select=self._toggle_ai_fx,
+                adjust=lambda d: self._toggle_ai_fx()))
         self.items.append(MenuItem(
             "TTS voice FX",
             lambda: "ON" if s.tts_fx else "off",
@@ -220,6 +242,13 @@ class Menu:
         with self.state.lock:
             self.state.tts_fx = not self.state.tts_fx
 
+    def _toggle_ai_fx(self):
+        """AI voice through the effect chain (pitch, echo, ...) on/off."""
+        with self.state.lock:
+            self.state.ai_fx = not self.state.ai_fx
+        if self.ai is not None:
+            self.ai.set_fx(self.state.ai_fx)
+
     def _tts_voice_label(self):
         v = self.state.tts_voice
         if v is None:
@@ -249,7 +278,8 @@ class Menu:
     def _toggle_monitor(self):
         self.monitor.toggle()
         if self.ai is not None:        # AI live: the worker mirrors the voice
-            self.ai.set_monitor(self.monitor.on)
+            # (unless FX routing is on - then the main mirror carries it)
+            self.ai.set_monitor(self.monitor.on and not self.state.ai_fx)
         if self.monitor.error:         # surface failures in the status line
             self.state.status_msg = f"test: {self.monitor.error}"
             self.state.status_at = time.time()
@@ -527,7 +557,7 @@ def run_ui(state, stop_flag, dev_line, err_line="", monitor=None, board=None,
         "Grit / growl": "EFFECTS", "Reverb": "EFFECTS", "Echo": "EFFECTS",
         "Radio voice": "EFFECTS", "Bass boost": "EFFECTS",
         "Voice volume": "EFFECTS", "Clip volume": "EFFECTS",
-        "AI voice": "AI", "AI character": "AI",
+        "AI voice": "AI", "AI character": "AI", "AI voice FX": "AI",
         "TTS voice FX": "TTS", "TTS volume": "TTS",
         "TTS voice": "TTS", "TTS rate": "TTS",
         "Sounds to mic": "SOUNDS", "Pause sounds": "SOUNDS",
@@ -997,6 +1027,9 @@ def run_ui(state, stop_flag, dev_line, err_line="", monitor=None, board=None,
                 held_keys.add(event.key)
                 if event.key == pygame.K_BACKSPACE:
                     tts_text = tts_text[:-1]
+                elif event.key == pygame.K_v and event.mod & pygame.KMOD_CTRL:
+                    tts_text = (tts_text
+                                + get_clipboard_text())[:TTS_MAX_CHARS]
                 elif event.key in (pygame.K_RETURN, pygame.K_KP_ENTER):
                     tts_commit()
                 elif event.key == pygame.K_ESCAPE:

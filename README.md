@@ -33,12 +33,16 @@ real mic --> [VoiceBox: pitch/effects/soundboard | or RVC AI voice] --> VB-CABLE
 - **AI voice** - the `rvc/` folder holds a trimmed RVC-beta package with
   `weights/*.pth` voice models; VoiceBox runs `rvc_worker.py` on RVC's own
   bundled CUDA Python and pipes the converted voice into the cable. Pick the
-  character from the menu; the soundboard keeps working on top. (To use a
-  package elsewhere, set `"rvc_dir"` in `settings.json` or change `RVC_DIR`
-  in `voicebox/config.py`.)
-- **Text to speech** - type a phrase in the panel under the soundboard and
-  press Enter to save it; saved phrases live in a scrollable list (click to
-  speak into the mic, `x` to delete) and persist in `tts_phrases.json`.
+  character from the menu; the soundboard keeps working on top. The
+  "AI voice FX" row routes the converted voice through VoiceBox's own
+  effect chain (pitch, echo, reverb, ...) - and therefore through HEAR
+  self-listen - instead of feeding the cable dry. (To use a package
+  elsewhere, set `"rvc_dir"` in `settings.json` or change `RVC_DIR` in
+  `voicebox/config.py`.)
+- **Text to speech** - type a phrase in the panel under the soundboard
+  (Ctrl+V pastes your clipboard) and press Enter to save it; saved phrases
+  live in a scrollable list (click to speak into the mic, `x` to delete)
+  and persist in `tts_phrases.json`.
   With "TTS voice FX" on, the speech goes through the same pitch/effect
   chain as your voice - and through the AI voice while the worker is live;
   toggle it off for clean TTS. The "TTS voice" and "TTS rate" rows pick

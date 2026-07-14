@@ -45,7 +45,7 @@ def main():
         save_settings(state.snapshot())
         recorder.close()               # before the stream: flush what's queued
         hotkeys.close()
-        ai.stop()
+        ai.close()
         monitor.close()
         player.close()
         engine.close()

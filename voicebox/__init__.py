@@ -45,7 +45,8 @@ speakers the same way, so you hear the AI voice too.
 TEXT TO SPEECH
 --------------
 The panel below the soundboard speaks typed phrases into the mic channel.
-Type in the box, press Enter (or ADD) to save - phrases persist in
+Type in the box (Ctrl+V pastes the clipboard), press Enter (or ADD) to
+save - phrases persist in
 tts_phrases.json and are synthesized once into tts_cache/ (Windows SAPI via
 PowerShell; espeak / `say` elsewhere). Click a phrase to speak it, the x on
 its row deletes it. With "TTS voice FX" on (menu row or the FX chip) the
@@ -61,9 +62,11 @@ an exact value (Enter commits, Esc cancels), and keyboard < > still steps.
 The Preset row applies curated combinations (Space Marine, Ghost, ...) which
 can be tweaked freely afterwards - the row shows "Custom" once any value
 diverges from the applied preset. Pressing the Preset or AI character row
-opens an alphabetical dropdown for direct picking. The window itself is
-resizable (drag edges, Aero snap); the soundboard pane absorbs the extra
-space.
+opens an alphabetical dropdown for direct picking. The "AI voice FX" row
+routes the converted AI voice through this same chain (and the HEAR
+mirror) instead of letting the worker feed the cable dry. The window
+itself is resizable (drag edges, Aero snap); the soundboard pane absorbs
+the extra space.
 
 Defaults:  arrows/WASD or d-pad/left stick = navigate,  Enter/Space or A =
 select,  left/right adjusts values,  1-9 = play clip,  0/Backspace or Y =

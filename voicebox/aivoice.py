@@ -1,11 +1,138 @@
 """AI voice (RVC): lifecycle of the rvc_worker.py background process."""
+import socket
 import subprocess
 import threading
 import time
 from pathlib import Path
 
+import numpy as np
+
 from .config import (BASE_DIR, INPUT_DEVICE_MATCH, OUTPUT_DEVICE_MATCH,
-                     RVC_DIR)
+                     RVC_DIR, SAMPLERATE)
+
+class _Lerp:
+    """Stateful linear-interpolation resampler: phase and the last sample
+    carry across chunks, so a continuous stream stays click-free."""
+
+    def __init__(self, src, dst):
+        self.step = src / dst
+        self.pos = 0.0                     # read position into [tail + chunk]
+        self.tail = np.zeros(1, dtype=np.float32)
+
+    def __call__(self, x):
+        if self.step == 1.0:
+            return x
+        data = np.concatenate([self.tail, x])
+        n = int(((len(data) - 1 - 1e-6) - self.pos) / self.step) + 1
+        if n <= 0:
+            self.pos -= len(x)
+            self.tail = data[-1:]
+            return np.zeros(0, dtype=np.float32)
+        idx = self.pos + np.arange(n) * self.step
+        i = idx.astype(np.int64)
+        f = (idx - i).astype(np.float32)
+        out = data[i] * (1.0 - f) + data[np.minimum(i + 1, len(data) - 1)] * f
+        self.pos = self.pos + n * self.step - (len(data) - 1)
+        self.tail = data[-1:]
+        return out.astype(np.float32)
+
+
+class AiFeed:
+    """Local bridge for the "AI voice FX" path. The worker connects here
+    (handshake: 4-byte little-endian sample rate, then an endless raw
+    float32 mono stream of its converted voice) and the audio callback
+    pulls blocks out with read(), already resampled to the engine rate -
+    so the AI voice runs through the same pitch/echo/reverb chain as the
+    mic. The buffer is primed before playback starts (burst jitter margin)
+    and capped so a stalled consumer can't grow the latency unbounded."""
+
+    MAX_BUF = SAMPLERATE * 2               # ~2 s cap: drop oldest audio
+    PREFILL = 4096                         # ~85 ms margin before starting
+
+    def __init__(self, state):
+        self.state = state
+        self.lock = threading.Lock()
+        self.buf = np.zeros(0, dtype=np.float32)
+        self.primed = False
+        self.connected = False
+        self.srv = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        self.srv.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        self.srv.bind(("127.0.0.1", 0))
+        self.srv.listen(1)
+        self.port = self.srv.getsockname()[1]
+        self._stop = threading.Event()
+        threading.Thread(target=self._serve, daemon=True).start()
+
+    def _serve(self):
+        """Accept loop: one worker at a time, a restart reconnects."""
+        while not self._stop.is_set():
+            try:
+                conn, _ = self.srv.accept()
+            except OSError:
+                return                     # server socket closed
+            with conn:
+                self._pump(conn)
+            self.connected = False
+            self.clear()
+
+    def _pump(self, conn):
+        try:
+            hdr = b""
+            while len(hdr) < 4:
+                got = conn.recv(4 - len(hdr))
+                if not got:
+                    return
+                hdr += got
+            src_sr = int.from_bytes(hdr, "little")
+            if not 8000 <= src_sr <= 192000:
+                return
+            lerp = _Lerp(src_sr, SAMPLERATE)
+            self.connected = True
+            pending = b""
+            while not self._stop.is_set():
+                data = conn.recv(65536)
+                if not data:
+                    return
+                pending += data
+                n4 = len(pending) // 4 * 4     # float32 alignment
+                if not n4:
+                    continue
+                x = np.frombuffer(pending[:n4], dtype=np.float32)
+                pending = pending[n4:]
+                y = lerp(x)
+                with self.lock:
+                    self.buf = np.concatenate([self.buf, y])
+                    if len(self.buf) > self.MAX_BUF:
+                        self.buf = self.buf[-self.MAX_BUF:]
+        except Exception:
+            pass
+
+    def read(self, n):
+        """n engine-rate samples for the audio callback (zero-padded on
+        underrun; an underrun re-primes so playback resumes with margin)."""
+        with self.lock:
+            if not self.primed:
+                if len(self.buf) < self.PREFILL:
+                    return np.zeros(n, dtype=np.float32)
+                self.primed = True
+            take, self.buf = self.buf[:n], self.buf[n:]
+        if len(take) < n:
+            self.primed = False
+            take = np.concatenate([take, np.zeros(n - len(take), np.float32)])
+        return take
+
+    def clear(self):
+        with self.lock:
+            self.buf = np.zeros(0, dtype=np.float32)
+            self.primed = False
+
+    def close(self):
+        self._stop.set()
+        try:
+            self.srv.close()
+        except Exception:
+            pass
+
 
 class AiVoice:
     """AI voice changer (RVC models like Arthur Morgan) run as a background
@@ -21,6 +148,13 @@ class AiVoice:
         self.proc = None
         self.status = "off"                # off | loading... | ON | error
         self.voices = self._scan()
+        self.feed = None                   # AI-voice-FX bridge (worker -> chain)
+        if self.voices:
+            try:
+                self.feed = AiFeed(state)
+            except Exception:
+                self.feed = None
+        state.ai_feed = self.feed          # read by the audio callback
         self.sel = 0
         for i, p in enumerate(self.voices):
             if "arthur" in p.stem.lower():  # a sensible default, partner
@@ -89,6 +223,24 @@ class AiVoice:
         except Exception:
             pass
 
+    def set_fx(self, on):
+        """Live-switch the routing: on = the worker streams the converted
+        voice through VoiceBox's effect chain (the "AI voice FX" row), off =
+        it feeds the cable directly, as before. Self-listen ownership moves
+        with it: through the chain, the main HEAR mirror already carries the
+        AI voice, so the worker-side mirror is released."""
+        if self.feed is not None:
+            self.feed.clear()              # drop audio from the old routing
+        proc = self.proc
+        if proc is not None and getattr(proc, "stdin", None) is not None:
+            try:
+                proc.stdin.write(f"FX {1 if on else 0}\n")
+                proc.stdin.flush()
+            except Exception:
+                pass
+        if self.monitor is not None and self.monitor.on:
+            self.set_monitor(not on)
+
     def toggle(self):
         if self.proc is not None:
             self.stop()
@@ -111,7 +263,12 @@ class AiVoice:
             cmd += ["--index", index]
         if isinstance(in_match, str) and in_match:
             cmd += ["--input-device", in_match]
-        if self.monitor is not None and self.monitor.on:
+        if self.feed is not None:
+            cmd += ["--fx-port", str(self.feed.port)]
+            if self.state.ai_fx:
+                cmd += ["--fx"]            # FX routing already on at launch
+        if (self.monitor is not None and self.monitor.on
+                and not self.state.ai_fx):
             cmd += ["--monitor"]           # self-listen already on at launch
         try:
             self.proc = subprocess.Popen(
@@ -157,7 +314,15 @@ class AiVoice:
             except Exception:
                 pass
         self.status = "off"
+        if self.feed is not None:
+            self.feed.clear()
         with self.state.lock:
             self.state.ai_mute = False
+
+    def close(self):
+        """Shutdown: stop the worker and release the FX bridge socket."""
+        self.stop()
+        if self.feed is not None:
+            self.feed.close()
 
 
