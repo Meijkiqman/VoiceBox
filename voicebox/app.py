@@ -34,7 +34,7 @@ def main():
     ai = AiVoice(state, monitor=monitor)
     tts = TTSBank(state, player, monitor, ai)
     tts.warm()                    # synthesize saved phrases in the background
-    hotkeys = GlobalHotkeys(state, board)
+    hotkeys = GlobalHotkeys(state, board, ai=ai)
     recorder = Recorder(state)
     threading.Thread(target=settings_autosave, args=(state, stop_flag),
                      daemon=True).start()

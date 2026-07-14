@@ -6,7 +6,7 @@ import numpy as np
 import soundfile as sf
 from scipy.signal import resample_poly
 
-from .config import MAX_CLIPS, SAMPLERATE, SOUNDS_DIR
+from .config import CLIP_PEAK, MAX_CLIPS, SAMPLERATE, SOUNDS_DIR
 
 def load_clips():
     clips, names = [], []
@@ -26,6 +26,10 @@ def load_clips():
         data = data.mean(axis=1)                   # downmix to mono
         if sr != SAMPLERATE:                       # resample to our rate
             data = resample_poly(data, SAMPLERATE, sr).astype(np.float32)
+        if CLIP_PEAK:                              # tame internet-sourced levels
+            peak = float(np.abs(data).max())
+            if peak > 1e-4:
+                data = data * min(CLIP_PEAK / peak, 4.0)
         clips.append(data)
         names.append(f.stem)
     return clips, names

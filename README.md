@@ -24,27 +24,32 @@ real mic --> [VoiceBox: pitch/effects/soundboard | or RVC AI voice] --> VB-CABLE
 - **Settings persist** - every slider, toggle and the chosen preset are
   saved to `settings.json` (autosaved while running) and restored on the
   next launch.
-- **Soundboard** - drop audio files (wav/flac/ogg/mp3) into `sounds/`; each
-  becomes a grid tile ("Rescan sounds" picks up new files without a
-  restart). Keys 1-9 fire the current hotkey page; Tab / `]` / `[` or the
-  PAGE chip flip pages, so every clip is reachable from the keyboard. You
-  always hear sounds locally; the "To mic" toggle decides whether Discord
-  hears them too. Pause freezes everything mid-clip, Stop clears it.
+- **Soundboard** - drop audio files (wav/flac/ogg/mp3) into `sounds/`, or
+  just drag them onto the window; each becomes a grid tile ("Rescan
+  sounds" also picks up new files without a restart). Clips are
+  loudness-normalized on load, so internet-sourced sounds stop being
+  randomly deafening or inaudible. Keys 1-9 fire the current hotkey page;
+  Tab / `]` / `[` or the PAGE chip flip pages, so every clip is reachable
+  from the keyboard. You always hear sounds locally; the "To mic" toggle
+  decides whether Discord hears them too. Pause freezes everything
+  mid-clip, Stop clears it.
 - **AI voice** - the `rvc/` folder holds a trimmed RVC-beta package with
   `weights/*.pth` voice models; VoiceBox runs `rvc_worker.py` on RVC's own
   bundled CUDA Python and pipes the converted voice into the cable. Pick the
   character from the menu; "AI pitch" transposes your voice going into the
-  model (live, no restart - e.g. +12 to reach female characters), and the
-  soundboard keeps working on top. The "AI voice FX" row routes the
+  model (live, no restart - e.g. +12 to reach female characters) and is
+  remembered per character, so each voice keeps its own tuning across
+  switches and restarts. The soundboard keeps working on top. The "AI voice FX" row routes the
   converted voice through VoiceBox's own effect chain (pitch, echo,
   reverb, ...) - and therefore through HEAR self-listen - instead of
   feeding the cable dry. (To use a package
   elsewhere, set `"rvc_dir"` in `settings.json` or change `RVC_DIR` in
   `voicebox/config.py`.)
 - **Text to speech** - type a phrase in the panel under the soundboard
-  (Ctrl+V pastes your clipboard) and press Enter to save it; saved phrases
-  live in a scrollable list (click to speak into the mic, `x` to delete)
-  and persist in `tts_phrases.json`.
+  (Ctrl+V pastes your clipboard) and press Enter to save it, or
+  Shift+Enter to speak it once without saving; saved phrases live in a
+  scrollable list (click to speak into the mic, `x` to delete) and
+  persist in `tts_phrases.json`.
   With "TTS voice FX" on, the speech goes through the same pitch/effect
   chain as your voice - and through the AI voice while the worker is live;
   toggle it off for clean TTS. The "TTS voice" and "TTS rate" rows pick
@@ -53,8 +58,9 @@ real mic --> [VoiceBox: pitch/effects/soundboard | or RVC AI voice] --> VB-CABLE
   cached in `tts_cache/`.
 - **Global hotkeys** - the soundboard works while a game or Discord has
   focus: Ctrl+Alt+1-9 fire clips, Ctrl+Alt+0 stops everything, Ctrl+Alt+P
-  cycles presets, Ctrl+Alt+M toggles mute. Remappable in `controls.json`
-  (`"global"` section); toggleable from the SYSTEM menu.
+  cycles presets, Ctrl+Alt+M toggles mute, Ctrl+Alt+A toggles the AI
+  voice. Remappable in `controls.json` (`"global"` section); toggleable
+  from the SYSTEM menu.
 - **Mic mute + push-to-talk** - mute from the menu, the `M` key, or the
   global hotkey; the header shows MUTED while the soundboard and TTS keep
   working. Bind a `"ptt"` key in `controls.json` for hold-to-talk (the mic

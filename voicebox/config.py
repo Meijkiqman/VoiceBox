@@ -25,6 +25,8 @@ OUTPUT_DEVICE_MATCH  = "CABLE Input"   # the virtual cable's INPUT side
 
 WINDOW_SIZE = (960, 660)   # initial + minimum size; the window is resizable
 MAX_CLIPS   = 64           # how many files from ./sounds get indexed
+CLIP_PEAK   = 0.9          # peak-normalize clips on load (0 = off); boosts
+                           # are capped at 4x so quiet files don't turn to hiss
 
 # AI voice (RVC) integration. RVC_DIR holds a trimmed RVC-beta package
 # (must contain runtime\python.exe, weights\*.pth, hubert_base.pt, rmvpe.pt);
@@ -84,6 +86,7 @@ DEFAULT_CONTROLS = {
         "stop_clips":  "ctrl+alt+0",
         "next_preset": "ctrl+alt+p",
         "mute":        "ctrl+alt+m",
+        "ai_voice":    "ctrl+alt+a",
         # push-to-talk: a single key name; while held the mic is live, on
         # release it mutes. Empty = off (mute stays a manual toggle).
         "ptt":         "",

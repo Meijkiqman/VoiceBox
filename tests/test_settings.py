@@ -37,6 +37,17 @@ check("restore round-trips",
 ev = fresh.events.get_nowait()
 check("restored pitch reaches the shifter via event", ev == ("pitch", -5))
 
+with state.lock:
+    state.ai_pitches = {"ArthurMorgan": -2, "eva": 12}
+fresh_ai = voicebox.State()
+fresh_ai.restore(state.snapshot())
+check("per-character AI pitches round-trip",
+      fresh_ai.ai_pitches == {"ArthurMorgan": -2, "eva": 12})
+hostile_ai = voicebox.State()
+hostile_ai.restore({"ai_pitches": {"a": 99, "b": "x", 3: 1, "c": -4.6}})
+check("hostile AI pitches sanitized",
+      hostile_ai.ai_pitches == {"a": 24, "c": -4})
+
 # ------------------------------------------------------ hostile settings.json
 hostile = voicebox.State()
 hostile.restore({"semitones": "loud", "drive": 99, "reverb": -3,

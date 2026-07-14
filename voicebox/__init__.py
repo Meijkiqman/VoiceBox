@@ -34,7 +34,8 @@ the pointer is over it).
 SOUNDBOARD
 ----------
 Every audio file in ./sounds (wav/flac/ogg/mp3, first 64, alphabetical) gets
-a button in the grid on the right. Clicking a button always plays the sound
+a button in the grid on the right - dragging a file onto the window copies
+it there and rescans. Clips are peak-normalized on load. Clicking a button always plays the sound
 locally so you hear it yourself; while the "To mic" toggle is on it is also
 mixed into the mic channel. Pause freezes all playing sounds (both paths),
 Stop clears them. Keys 1-9 trigger the first nine sounds. The Hear toggle in
@@ -46,7 +47,7 @@ TEXT TO SPEECH
 --------------
 The panel below the soundboard speaks typed phrases into the mic channel.
 Type in the box (Ctrl+V pastes the clipboard), press Enter (or ADD) to
-save - phrases persist in
+save, or Shift+Enter to speak once without saving - phrases persist in
 tts_phrases.json and are synthesized once into tts_cache/ (Windows SAPI via
 PowerShell; espeak / `say` elsewhere). Click a phrase to speak it, the x on
 its row deletes it. With "TTS voice FX" on (menu row or the FX chip) the

@@ -217,6 +217,19 @@ class TTSBank:
         self.ensure(text)
         return True
 
+    def say(self, text):
+        """Speak text once without saving it (quick-speak, Shift+Enter).
+        True = accepted; synthesis may land it a moment later."""
+        text = " ".join(str(text).split())[:TTS_MAX_CHARS]
+        if not text:
+            return False
+        if self.status.get(text) == "ready":
+            self._route(text)
+        else:
+            self.pending = text            # auto-plays when synthesis lands
+            self.ensure(text)
+        return True
+
     def delete(self, i):
         if not (0 <= i < len(self.phrases)):
             return

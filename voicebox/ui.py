@@ -1,10 +1,13 @@
 """The VoiceBox window: settings menu, soundboard grid, TTS panel (pygame).
 Skin ported from design/VoiceBox Skin.dc.html - see run_ui's docstring."""
+import shutil
 import time
+from pathlib import Path
 
 import numpy as np
 
-from .config import BASE_DIR, SAMPLERATE, TTS_MAX_CHARS, WINDOW_SIZE
+from .config import (BASE_DIR, SAMPLERATE, SOUNDS_DIR, TTS_MAX_CHARS,
+                     WINDOW_SIZE)
 from .controls import build_keymap, load_controls
 from .soundboard import Board
 from .tts import TTSBank
@@ -1007,9 +1010,6 @@ def run_ui(state, stop_flag, dev_line, err_line="", monitor=None, board=None,
         dt = min(0.1, now - last_t)
         last_t = now
 
-        if state.clips_version != clips_seen:      # rescan happened
-            rebuild_grid()
-
         for event in pygame.event.get():
             if event.type == pygame.QUIT:
                 stop_flag.set()
@@ -1018,6 +1018,24 @@ def run_ui(state, stop_flag, dev_line, err_line="", monitor=None, board=None,
                 screen = pygame.display.set_mode((event.w, event.h),
                                                  pygame.RESIZABLE)
                 relayout()
+
+            elif event.type == pygame.DROPFILE:
+                # drag a sound onto the window -> copy into sounds/ + rescan
+                src = Path(event.file)
+                if src.is_file() and src.suffix.lower() in (
+                        ".wav", ".flac", ".ogg", ".mp3"):
+                    try:
+                        SOUNDS_DIR.mkdir(exist_ok=True)
+                        dest = SOUNDS_DIR / src.name
+                        if not dest.exists():   # same name = already there
+                            shutil.copy2(src, dest)
+                        board.rescan()          # reports the new count itself
+                    except Exception as e:
+                        state.status_msg = f"drop: {e}"
+                        state.status_at = time.time()
+                else:
+                    state.status_msg = "drop: only wav / flac / ogg / mp3"
+                    state.status_at = time.time()
 
             elif drop is not None and event.type in (
                     pygame.KEYDOWN, pygame.KEYUP, pygame.MOUSEBUTTONDOWN,
@@ -1056,11 +1074,15 @@ def run_ui(state, stop_flag, dev_line, err_line="", monitor=None, board=None,
                 held_keys.add(event.key)
                 if event.key == pygame.K_BACKSPACE:
                     tts_text = tts_text[:-1]
-                elif event.key == pygame.K_v and event.mod & pygame.KMOD_CTRL:
+                elif (event.key == pygame.K_v
+                      and getattr(event, "mod", 0) & pygame.KMOD_CTRL):
                     tts_text = (tts_text
                                 + get_clipboard_text())[:TTS_MAX_CHARS]
                 elif event.key in (pygame.K_RETURN, pygame.K_KP_ENTER):
-                    tts_commit()
+                    if getattr(event, "mod", 0) & pygame.KMOD_SHIFT:
+                        tts.say(tts_text)      # speak once, don't save
+                    else:
+                        tts_commit()
                 elif event.key == pygame.K_ESCAPE:
                     tts_set_focus(False)
 
@@ -1199,6 +1221,11 @@ def run_ui(state, stop_flag, dev_line, err_line="", monitor=None, board=None,
                         go_left() if event.value < 0 else go_right()
                     else:
                         menu.on_up() if event.value < 0 else menu.on_down()
+
+        # rescan (menu row, drag-drop, hotkey) may have swapped the clip list
+        # during the event phase: refresh the grid caches before drawing
+        if state.clips_version != clips_seen:
+            rebuild_grid()
 
         # ------------------------------------------------------------- draw
         mouse_pos = pygame.mouse.get_pos()
@@ -1556,7 +1583,8 @@ def run_ui(state, stop_flag, dev_line, err_line="", monitor=None, board=None,
             caret_x = tx0 + tsurf.get_width() + 2
         else:
             if not tts_focus:
-                ph = T(f_val, "Type a phrase, Enter to save...", CLR["faint"])
+                ph = T(f_val, "Type - Enter saves, Shift+Enter speaks...",
+                       CLR["faint"])
                 screen.blit(ph, (in_rect.x + 10, icy - ph.get_height() // 2))
             caret_x = in_rect.x + 10
         if tts_focus and (now * 2.0) % 2 < 1:      # blinking caret

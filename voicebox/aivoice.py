@@ -193,8 +193,11 @@ class AiVoice:
         if not self.voices or not (0 <= i < len(self.voices)) or i == self.sel:
             return
         self.sel = i
+        with self.state.lock:              # per-character pitch memory
+            self.state.ai_pitch = float(
+                self.state.ai_pitches.get(self.voice_name(), 0))
         if self.proc is not None:          # live switch: restart on new voice
-            self.stop()
+            self.stop()                    # (start() reads the recalled pitch)
             self.start()
 
     def inject(self, wav_path):
@@ -225,7 +228,15 @@ class AiVoice:
 
     def set_pitch(self, semis):
         """Live-transpose the voice going into the model (the AI pitch row).
-        No worker restart needed: RVC reads the key on every inference."""
+        No worker restart needed: RVC reads the key on every inference.
+        The value is remembered per character (recalled by select())."""
+        semis = int(semis)
+        if self.voices:
+            with self.state.lock:
+                if semis:
+                    self.state.ai_pitches[self.voice_name()] = semis
+                else:
+                    self.state.ai_pitches.pop(self.voice_name(), None)
         proc = self.proc
         if proc is None or getattr(proc, "stdin", None) is None:
             return

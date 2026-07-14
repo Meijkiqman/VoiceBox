@@ -165,6 +165,32 @@ check("local player reports stream status",
       state.status_msg.startswith("speakers:")
       and state.status_count == prev_count + 1)
 
+# ------------------------------------------------- loudness normalization
+import tempfile
+from pathlib import Path
+
+import soundfile as sf
+
+norm_dir = Path(tempfile.mkdtemp())
+t = np.arange(4800) / 48000
+sf.write(str(norm_dir / "loud.wav"),
+         (0.98 * np.sin(2 * np.pi * 220 * t)).astype(np.float32),
+         48000, subtype="FLOAT")
+sf.write(str(norm_dir / "quiet.wav"),
+         (0.05 * np.sin(2 * np.pi * 220 * t)).astype(np.float32),
+         48000, subtype="FLOAT")
+old_dir = voicebox.soundboard.SOUNDS_DIR
+voicebox.soundboard.SOUNDS_DIR = norm_dir
+n_clips, n_names = voicebox.load_clips()         # the unpatched original
+voicebox.soundboard.SOUNDS_DIR = old_dir
+by_name = dict(zip(n_names, n_clips))
+check("loud clips normalized down to the target peak",
+      abs(float(np.abs(by_name["loud"]).max()) - 0.9) < 0.02,
+      f"peak={float(np.abs(by_name['loud']).max()):.3f}")
+check("quiet clips boosted at most 4x",
+      abs(float(np.abs(by_name["quiet"]).max()) - 0.2) < 0.02,
+      f"peak={float(np.abs(by_name['quiet']).max()):.3f}")
+
 # ------------------------------------------------------------- grid UI smoke
 import pygame
 with state.lock:
@@ -173,8 +199,17 @@ drain_ints()
 stop_flag = threading.Event()
 ui_board = voicebox.Board(state, None, None)     # no real streams from clicks
 
+# drag-and-drop lands in (a stand-in for) sounds/ and triggers a rescan
+drop_src = Path(tempfile.mkdtemp()) / "dropped.wav"
+sf.write(str(drop_src), np.zeros(4800, np.float32), 48000)
+drop_dest_dir = Path(tempfile.mkdtemp())
+old_sounds_dir = voicebox.ui.SOUNDS_DIR
+voicebox.ui.SOUNDS_DIR = drop_dest_dir
+
 def poke():
     time.sleep(0.7)
+    pygame.event.post(pygame.event.Event(pygame.DROPFILE, file=str(drop_src)))
+    time.sleep(0.1)
     for _ in range(3):
         pygame.event.post(pygame.event.Event(pygame.KEYDOWN, key=pygame.K_DOWN))
         time.sleep(0.01)
@@ -197,8 +232,12 @@ try:
     voicebox.run_ui(state, stop_flag, "dev", "", None, ui_board)
 except Exception as e:
     ui_error.append(e)
+finally:
+    voicebox.ui.SOUNDS_DIR = old_sounds_dir
 check("two-pane UI with grid survives", not ui_error,
       repr(ui_error[0]) if ui_error else "")
+check("dropped file copied into sounds/",
+      (drop_dest_dir / "dropped.wav").is_file())
 ints = drain_ints()
 check("grid click + hotkey reached mic channel", sorted(ints) == [0, 2], str(ints))
 check("strip click toggled to-mic off", state.clips_to_mic is False)

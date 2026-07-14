@@ -76,6 +76,17 @@ check("failed synth -> error status", wait_status(bank, "boom") == "error")
 check("synth error surfaces in status line", state.status_msg.startswith("TTS:"))
 bank.delete(bank.phrases.index("boom"))
 
+# -------------------------------------------------------------- quick-speak
+while not state.events.empty():
+    state.events.get_nowait()
+check("say accepts a phrase without saving it",
+      bank.say("quick one") is True and "quick one" not in bank.phrases)
+check("say synthesizes on demand", wait_status(bank, "quick one") == "ready")
+qev = wait_event(state)
+check("say routes to the mic like a saved phrase",
+      isinstance(qev, tuple) and qev[0] == "tts")
+check("say of empty text rejected", bank.say("   ") is False)
+
 # ------------------------------------------------- routing through the chain
 cb = voicebox.make_callback(state)
 frames = voicebox.BLOCKSIZE
@@ -238,6 +249,13 @@ def poke():
     post(pygame.event.Event(pygame.KEYDOWN, key=pygame.K_RETURN))
     time.sleep(0.3)
     snaps.append(list(ui_bank.phrases))               # after paste + save
+    # Shift+Enter speaks the typed text without saving it
+    post(pygame.event.Event(pygame.TEXTINPUT, text="quick ui"))
+    time.sleep(0.05)
+    post(pygame.event.Event(pygame.KEYDOWN, key=pygame.K_RETURN,
+                            mod=pygame.KMOD_SHIFT))
+    time.sleep(0.3)
+    snaps.append(list(ui_bank.phrases))               # unchanged
     post(pygame.event.Event(pygame.QUIT))
 
 
@@ -256,7 +274,11 @@ check("UI with TTS panel survives", not ui_error,
 check("typed phrase was saved via the panel", snaps and snaps[0] == ["hi there"])
 check("row x deleted the phrase", len(snaps) >= 2 and snaps[1] == [])
 check("Ctrl+V pasted the clipboard into the box",
-      len(snaps) == 3 and snaps[2] == ["pasted from clipboard"], str(snaps))
+      len(snaps) >= 3 and snaps[2] == ["pasted from clipboard"], str(snaps))
+check("Shift+Enter spoke without saving",
+      len(snaps) == 4 and snaps[3] == snaps[2], str(snaps))
+check("quick-speak synthesized the unsaved text",
+      ui_bank.status.get("quick ui") == "ready")
 
 tts_events, int_events = [], []
 while not ui_state.events.empty():

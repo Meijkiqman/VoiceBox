@@ -169,6 +169,24 @@ try:
     ai_zero.start()
     check("zero AI pitch omits --pitch", "--pitch" not in FakeProc.last.cmd)
     ai_zero.stop()
+
+    # ---- per-character pitch memory --------------------------------------
+    with state.lock:
+        state.ai_pitches["kratos"] = 7
+    ai_mem = voicebox.AiVoice(state, rvc_dir=root)
+    ai_mem.select(1)                       # kratos
+    check("character switch recalls its pitch", state.ai_pitch == 7.0)
+    ai_mem.select(2)                       # vader: no memory -> neutral
+    check("unknown character resets the pitch", state.ai_pitch == 0.0)
+    ai_mem.set_pitch(5)
+    check("dialing pitch is remembered per character",
+          state.ai_pitches.get("vader") == 5)
+    ai_mem.set_pitch(0)
+    check("zero pitch clears the memory entry",
+          "vader" not in state.ai_pitches)
+    with state.lock:
+        state.ai_pitches.clear()
+        state.ai_pitch = 0.0
 finally:
     voicebox.subprocess.Popen = real_popen
 

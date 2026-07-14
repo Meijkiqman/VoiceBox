@@ -26,9 +26,10 @@ class GlobalHotkeys:
     (Board.play/stop via queues, apply_preset under the state lock) is
     thread-safe already."""
 
-    def __init__(self, state, board, cfg=None):
+    def __init__(self, state, board, cfg=None, ai=None):
         self.state = state
         self.board = board
+        self.ai = ai                   # AiVoice, for the ai_voice binding
         self.cfg = (cfg or load_controls()).get("global") or {}
         self.error = ""
         self._kb = None                # the keyboard module while registered
@@ -56,6 +57,8 @@ class GlobalHotkeys:
             out.append((str(self.cfg["next_preset"]), self._next_preset))
         if self.cfg.get("mute"):
             out.append((str(self.cfg["mute"]), self._toggle_mute))
+        if self.cfg.get("ai_voice") and self.ai is not None:
+            out.append((str(self.cfg["ai_voice"]), self.ai.toggle))
         return out
 
     def _next_preset(self):

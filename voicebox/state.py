@@ -109,6 +109,7 @@ class State:
         self.ai_mute = False          # AI worker owns the voice; mute ours
         self.ai_fx = False            # AI voice through the effect chain
         self.ai_pitch = 0.0           # transpose INTO the model, semitones
+        self.ai_pitches = {}          # per-character memory: {stem: semitones}
         self.ai_feed = None           # AiFeed bridge while RVC is available
         self.cues_on = True           # audible blips: AI ready/died, mute
         self.cues = None              # Cues instance once the app is wired
@@ -209,6 +210,7 @@ class State:
         with self.lock:
             data = {k: getattr(self, k) for k in PERSIST_FIELDS}
             data["preset_idx"] = self.preset_idx
+            data["ai_pitches"] = dict(self.ai_pitches)
         return data
 
     def restore(self, data):
@@ -243,6 +245,12 @@ class State:
             except (TypeError, ValueError):
                 idx = self.preset_idx
             self.preset_idx = idx % len(self.presets_all())
+            pitches = data.get("ai_pitches")
+            if isinstance(pitches, dict):      # per-character AI pitch memory
+                self.ai_pitches = {
+                    str(k): int(max(-24, min(24, v)))
+                    for k, v in pitches.items()
+                    if isinstance(k, str) and isinstance(v, (int, float))}
         if semis is not None:
             self.set_pitch(semis)
 

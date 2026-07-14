@@ -135,6 +135,30 @@ fake, state, board, hk = with_fake({"global": {"enabled": False,
                                                "clips": ["ctrl+alt+1"]}})
 check("disabled config registers nothing", not hk.on and len(fake.hotkeys) == 0)
 
+# ------------------------------------------------------------ AI voice hotkey
+class StubAI:
+    def __init__(self): self.toggles = 0
+    def toggle(self): self.toggles += 1
+
+fake = FakeKeyboard()
+sys.modules["keyboard"] = fake
+state = voicebox.State()
+stub_ai = StubAI()
+hk = voicebox.GlobalHotkeys(state, voicebox.Board(state),
+                            {"global": {"ai_voice": "ctrl+alt+a"}}, ai=stub_ai)
+check("AI voice hotkey registered", len(fake.hotkeys) == 1)
+fake.fire("ctrl+alt+a")
+fake.fire("ctrl+alt+a")
+check("AI voice hotkey toggles the worker", stub_ai.toggles == 2)
+hk.close()
+
+fake = FakeKeyboard()
+sys.modules["keyboard"] = fake
+hk = voicebox.GlobalHotkeys(state, voicebox.Board(state),
+                            {"global": {"ai_voice": "ctrl+alt+a"}})
+check("AI binding skipped without AiVoice", len(fake.hotkeys) == 0)
+hk.close()
+
 # ------------------------------------------------------ graceful degradation
 sys.modules["keyboard"] = None         # forces `import keyboard` to fail
 state = voicebox.State()
@@ -158,7 +182,8 @@ check("partial registration rolls back",
 # --------------------------------------------------------------- config merge
 cfg = voicebox.load_controls()
 check("defaults include the global section",
-      isinstance(cfg.get("global"), dict) and "clips" in cfg["global"])
+      isinstance(cfg.get("global"), dict) and "clips" in cfg["global"]
+      and "ai_voice" in cfg["global"])
 
 del sys.modules["keyboard"]
 finish()
