@@ -54,6 +54,14 @@ its row deletes it. With "TTS voice FX" on (menu row or the FX chip) the
 speech runs through the same pitch/effect chain as your voice - and through
 the AI voice while the RVC worker is live; off = clean TTS.
 
+SCENES
+------
+A scene is the whole persona in one row: the effect dialing, the AI
+character (and whether the worker runs), its pitch and FX routing, and the
+TTS voice/rate. "Save scene" snapshots the current setup into scenes.json;
+the Scene row (or Ctrl+Alt+S) applies one, starting or stopping the RVC
+worker to match.
+
 EFFECTS & PRESETS
 -----------------
 Pitch, robot/vocoder mix, helmet doubler, grit, reverb, echo, radio band-pass
@@ -81,8 +89,8 @@ import numpy as np
 import sounddevice as sd
 import soundfile as sf
 
-from . import (aivoice, app, audio, config, controls, cues, dsp, soundboard,
-               state, tts, ui)
+from . import (aivoice, app, audio, config, controls, cues, dsp, scenes,
+               soundboard, state, tts, ui)
 from .config import *          # noqa: F401,F403 - flat API kept for tests
 from .dsp import *             # noqa: F401,F403
 from .soundboard import *      # noqa: F401,F403
@@ -90,6 +98,7 @@ from .state import *           # noqa: F401,F403
 from .audio import *           # noqa: F401,F403
 from .aivoice import *         # noqa: F401,F403
 from .cues import *            # noqa: F401,F403
+from .scenes import *          # noqa: F401,F403
 from .tts import *             # noqa: F401,F403
 from .controls import *        # noqa: F401,F403
 from .ui import *              # noqa: F401,F403

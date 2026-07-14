@@ -6,6 +6,7 @@ SOUNDS_DIR    = BASE_DIR / "sounds"       # anchored: works from any cwd
 CONTROLS_PATH = BASE_DIR / "controls.json"
 SETTINGS_PATH = BASE_DIR / "settings.json"       # dialed-in values, restored on launch
 USER_PRESETS_PATH = BASE_DIR / "user_presets.json"  # "Save preset" snapshots
+SCENES_PATH   = BASE_DIR / "scenes.json"         # "Save scene" full-setup snapshots
 RECORDINGS_DIR = BASE_DIR / "recordings"         # "Record output" wav files
 
 TTS_PHRASES_PATH = BASE_DIR / "tts_phrases.json"  # saved TTS phrases
@@ -85,6 +86,7 @@ DEFAULT_CONTROLS = {
                         "ctrl+alt+7", "ctrl+alt+8", "ctrl+alt+9"],
         "stop_clips":  "ctrl+alt+0",
         "next_preset": "ctrl+alt+p",
+        "next_scene":  "ctrl+alt+s",
         "mute":        "ctrl+alt+m",
         "ai_voice":    "ctrl+alt+a",
         # push-to-talk: a single key name; while held the mic is live, on

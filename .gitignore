@@ -24,6 +24,7 @@ rvc/
 # personal dialing - restored on launch, stays local
 settings.json
 user_presets.json
+scenes.json
 
 # recordings stay local
 recordings/

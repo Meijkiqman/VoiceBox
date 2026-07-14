@@ -13,6 +13,12 @@ real mic --> [VoiceBox: pitch/effects/soundboard | or RVC AI voice] --> VB-CABLE
 
 ## Features
 
+- **Scenes** - one press for a whole persona: a scene snapshots the effect
+  dialing *plus* which AI character is loaded (and whether the AI voice runs
+  at all), its pitch and FX routing, and the TTS voice/rate. "Save scene"
+  stores the current setup (`scenes.json` - edit it to rename); the Scene
+  row or Ctrl+Alt+S switches, starting or stopping the RVC worker to match.
+  So "DnD ghost" and "game night" are one keypress apart, mid-game.
 - **Presets** - Space Marine, Ghost, Robot, Chipmunk, Monster, Ork,
   Walkie-Talkie; every ingredient is also a manual row (pitch, robot/vocoder
   mix, helmet doubler, grit, reverb, echo, radio band-pass, bass boost).
@@ -60,9 +66,9 @@ real mic --> [VoiceBox: pitch/effects/soundboard | or RVC AI voice] --> VB-CABLE
   `tts_cache/`.
 - **Global hotkeys** - the soundboard works while a game or Discord has
   focus: Ctrl+Alt+1-9 fire clips, Ctrl+Alt+0 stops everything, Ctrl+Alt+P
-  cycles presets, Ctrl+Alt+M toggles mute, Ctrl+Alt+A toggles the AI
-  voice. Remappable in `controls.json` (`"global"` section); toggleable
-  from the SYSTEM menu.
+  cycles presets, Ctrl+Alt+S steps through scenes, Ctrl+Alt+M toggles
+  mute, Ctrl+Alt+A toggles the AI voice. Remappable in `controls.json`
+  (`"global"` section); toggleable from the SYSTEM menu.
 - **Mic mute + push-to-talk** - mute from the menu, the `M` key, or the
   global hotkey; the header shows MUTED while the soundboard and TTS keep
   working. Bind a `"ptt"` key in `controls.json` for hold-to-talk (the mic
@@ -136,6 +142,8 @@ voicebox/         the app package
   audio.py          stream callback, device engine, self-listen, recorder
   soundboard.py     clip loading + the Board controller
   aivoice.py        RVC worker process lifecycle
+  scenes.py         full-setup snapshots (effects + AI + TTS)
+  cues.py           self-heard blips for AI-ready / mute
   tts.py            speech rendering, cache, phrase bank
   controls.py       controls.json parsing + global hotkeys
   ui.py             the pygame window (menu, grid, TTS panel)
@@ -147,6 +155,7 @@ VoiceBox.bat      run-from-source launcher (auto-installs deps)
 controls.json     input bindings (delete to restore defaults)
 settings.json     your dialed-in values, restored on launch (not committed)
 user_presets.json your saved presets (not committed)
+scenes.json       your saved scenes (not committed)
 sounds/           your soundboard clips (not committed)
 tts_phrases.json  your saved TTS phrases (not committed)
 tts_cache/        rendered TTS audio, rebuilt on demand (not committed)

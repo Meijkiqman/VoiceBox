@@ -159,6 +159,29 @@ hk = voicebox.GlobalHotkeys(state, voicebox.Board(state),
 check("AI binding skipped without AiVoice", len(fake.hotkeys) == 0)
 hk.close()
 
+# ------------------------------------------------------------- scene hotkey
+class StubScenes:
+    def __init__(self): self.cycled = []
+    def cycle(self, d=1): self.cycled.append(d)
+
+fake = FakeKeyboard()
+sys.modules["keyboard"] = fake
+stub_scenes = StubScenes()
+hk = voicebox.GlobalHotkeys(state, voicebox.Board(state),
+                            {"global": {"next_scene": "ctrl+alt+s"}},
+                            scenes=stub_scenes)
+check("scene hotkey registered", len(fake.hotkeys) == 1)
+fake.fire("ctrl+alt+s")
+check("scene hotkey steps to the next scene", len(stub_scenes.cycled) == 1)
+hk.close()
+
+fake = FakeKeyboard()
+sys.modules["keyboard"] = fake
+hk = voicebox.GlobalHotkeys(state, voicebox.Board(state),
+                            {"global": {"next_scene": "ctrl+alt+s"}})
+check("scene binding skipped without Scenes", len(fake.hotkeys) == 0)
+hk.close()
+
 # ------------------------------------------------------ graceful degradation
 sys.modules["keyboard"] = None         # forces `import keyboard` to fail
 state = voicebox.State()
@@ -183,7 +206,7 @@ check("partial registration rolls back",
 cfg = voicebox.load_controls()
 check("defaults include the global section",
       isinstance(cfg.get("global"), dict) and "clips" in cfg["global"]
-      and "ai_voice" in cfg["global"])
+      and "ai_voice" in cfg["global"] and "next_scene" in cfg["global"])
 
 del sys.modules["keyboard"]
 finish()

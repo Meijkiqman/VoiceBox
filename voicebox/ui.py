@@ -46,7 +46,8 @@ class Menu:
     controller uses, so behavior is identical across input devices."""
 
     def __init__(self, state, stop_flag, monitor=None, board=None, ai=None,
-                 hotkeys=None, engine=None, recorder=None, tts=None):
+                 hotkeys=None, engine=None, recorder=None, tts=None,
+                 scenes=None):
         self.state = state
         self.stop_flag = stop_flag
         self.monitor = monitor
@@ -56,6 +57,7 @@ class Menu:
         self.engine = engine
         self.recorder = recorder
         self.tts = tts
+        self.scenes = scenes
         self.sel = 0
         self.flash = {}               # item index -> flash-until timestamp
         s = state
@@ -223,6 +225,15 @@ class Menu:
         self.items.append(MenuItem("Stop all sounds", select=b.stop))
         self.items.append(MenuItem("Rescan sounds", select=b.rescan))
         self.items.append(MenuItem("Quit", select=self.stop_flag.set, flash=False))
+        if scenes is not None:
+            # the whole persona in one row: first, above the pieces it sets
+            self.items[0:0] = [
+                MenuItem("Scene",
+                         lambda: scenes.applied or "-",
+                         select=lambda: scenes.cycle(+1),
+                         adjust=lambda d: scenes.cycle(d)),
+                MenuItem("Save scene", select=self._save_scene),
+            ]
 
     def toggle_mute(self):
         with self.state.lock:
@@ -233,6 +244,11 @@ class Menu:
     def _save_preset(self):
         name = self.state.save_user_preset()
         self.state.status_msg = f"saved \"{name}\" (edit user_presets.json to rename)"
+        self.state.status_at = time.time()
+
+    def _save_scene(self):
+        name = self.scenes.save()
+        self.state.status_msg = f"saved \"{name}\" (edit scenes.json to rename)"
         self.state.status_at = time.time()
 
     def _toggle_gate(self):
@@ -338,7 +354,8 @@ class Menu:
 
 
 def run_ui(state, stop_flag, dev_line, err_line="", monitor=None, board=None,
-           ai=None, tts=None, hotkeys=None, engine=None, recorder=None):
+           ai=None, tts=None, hotkeys=None, engine=None, recorder=None,
+           scenes=None):
     """VoiceBox skin, ported from design/VoiceBox Skin.dc.html.
 
     Faithful to the tokens JSON + motion spec in that file: Space Grotesk for
@@ -448,7 +465,7 @@ def run_ui(state, stop_flag, dev_line, err_line="", monitor=None, board=None,
     if tts is None:
         tts = TTSBank(state, getattr(board, "player", None), monitor, ai)
     menu = Menu(state, stop_flag, monitor, board, ai, hotkeys, engine,
-                recorder, tts)
+                recorder, tts, scenes)
     board = menu.board
     kb_action = {a: keys for a, keys in keymap.items()}
 
@@ -581,6 +598,7 @@ def run_ui(state, stop_flag, dev_line, err_line="", monitor=None, board=None,
         rebuild_grid()
 
     SECTION_OF = {
+        "Scene": "SCENES", "Save scene": "SCENES",
         "Preset": "VOICE", "Save preset": "VOICE", "Pitch": "VOICE",
         "Mic": "VOICE", "Noise gate": "VOICE",
         "Robot voice": "EFFECTS", "Helmet doubler": "EFFECTS",
@@ -905,10 +923,10 @@ def run_ui(state, stop_flag, dev_line, err_line="", monitor=None, board=None,
                 if dot:
                     pygame.draw.circle(screen, dot, (right - vs.get_width() - 10, cy), 2)
 
-    # -------------------------------------- dropdown picker (Preset / AI voice)
-    # Pressing the Preset or AI character row opens an alphabetical list
-    # anchored to the row; while open it owns keyboard, mouse and controller.
-    DROP_ROWS = ("Preset", "AI character")
+    # ------------------------------ dropdown picker (Scene / Preset / AI voice)
+    # Pressing one of these rows opens an alphabetical list anchored to the
+    # row; while open it owns keyboard, mouse and controller.
+    DROP_ROWS = ("Scene", "Preset", "AI character")
     drop = None                   # dict(items, rect, sel, cur, scroll, ...) | None
 
     def open_dropdown(row_idx):
@@ -922,12 +940,22 @@ def run_ui(state, stop_flag, dev_line, err_line="", monitor=None, board=None,
                      for nm, i in entries]
             cur = next((k for k, (_nm, i) in enumerate(entries)
                         if i == state.preset_idx), 0)
-        elif ai is not None:
+        elif label == "AI character" and ai is not None:
             entries = sorted(((p.stem, i) for i, p in enumerate(ai.voices)),
                              key=lambda e: e[0].lower())
             items = [(nm, lambda i=i: ai.select(i)) for nm, i in entries]
             cur = next((k for k, (_nm, i) in enumerate(entries)
                         if i == ai.sel), 0)
+        elif label == "Scene" and scenes is not None:
+            if not scenes.scenes:              # nothing to pick from yet
+                state.status_msg = "no scenes yet - dial a setup, then Save scene"
+                state.status_at = time.time()
+                return
+            entries = sorted(((nm, i) for i, nm in enumerate(scenes.names())),
+                             key=lambda e: e[0].lower())
+            items = [(nm, lambda i=i: scenes.apply(i)) for nm, i in entries]
+            cur = next((k for k, (_nm, i) in enumerate(entries)
+                        if i == scenes.sel), 0)
         else:
             return
         item_h, pad = 28, 4

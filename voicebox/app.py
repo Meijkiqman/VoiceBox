@@ -8,6 +8,7 @@ from .aivoice import AiVoice
 from .audio import AudioEngine, LocalPlayer, Monitor, Recorder
 from .controls import GlobalHotkeys
 from .cues import Cues
+from .scenes import Scenes
 from .soundboard import Board
 from .state import State, load_settings, save_settings, settings_autosave
 from .tts import TTSBank
@@ -34,13 +35,14 @@ def main():
     ai = AiVoice(state, monitor=monitor)
     tts = TTSBank(state, player, monitor, ai)
     tts.warm()                    # synthesize saved phrases in the background
-    hotkeys = GlobalHotkeys(state, board, ai=ai)
+    scenes = Scenes(state, ai, tts)
+    hotkeys = GlobalHotkeys(state, board, ai=ai, scenes=scenes)
     recorder = Recorder(state)
     threading.Thread(target=settings_autosave, args=(state, stop_flag),
                      daemon=True).start()
     try:
         run_ui(state, stop_flag, engine.dev_line, engine.error, monitor,
-               board, ai, tts, hotkeys, engine, recorder)
+               board, ai, tts, hotkeys, engine, recorder, scenes)
     except KeyboardInterrupt:
         pass
     finally:
