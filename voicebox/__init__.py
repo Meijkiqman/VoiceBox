@@ -48,8 +48,8 @@ TEXT TO SPEECH
 The panel below the soundboard speaks typed phrases into the mic channel.
 Type in the box (Ctrl+V pastes the clipboard), press Enter (or ADD) to
 save, or Shift+Enter to speak once without saving - phrases persist in
-tts_phrases.json and are synthesized once into tts_cache/ (Windows SAPI via
-PowerShell; espeak / `say` elsewhere). Click a phrase to speak it, the x on
+tts_phrases.json and are synthesized once into tts_cache/ (Windows: SAPI5
+plus OneCore/natural voices via PowerShell; espeak / `say` elsewhere). Click a phrase to speak it, the x on
 its row deletes it. With "TTS voice FX" on (menu row or the FX chip) the
 speech runs through the same pitch/effect chain as your voice - and through
 the AI voice while the RVC worker is live; off = clean TTS.

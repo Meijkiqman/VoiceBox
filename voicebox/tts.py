@@ -15,29 +15,88 @@ from scipy.signal import resample_poly
 from .config import (SAMPLERATE, TTS_CACHE_DIR, TTS_MAX_CHARS,
                      TTS_PHRASES_PATH)
 
+def winrt_speaking_rate(rate):
+    """SAPI -10..10 speaking rate -> the WinRT SpeechSynthesizer scale
+    (0.5..6.0, 1.0 = normal). Matches the say/espeak wpm curve: each 10
+    steps doubles/halves the pace."""
+    return max(0.5, min(6.0, 2.0 ** (rate / 10.0)))
+
+
+# Windows render script. One PowerShell pass picks the engine by the selected
+# voice: classic SAPI5 (System.Speech) when it owns the voice or none is set,
+# else the modern OneCore/WinRT engine (Windows.Media.SpeechSynthesis) - which
+# is where "natural" voices and most non-English ones live and which
+# System.Speech cannot see. Exact name wins; a substring is a legacy fallback.
+# __PATH__/__VOICE__ are single-quote-escaped literals, __RATE__/__WRATE__ are
+# numbers, and the phrase text comes over stdin (no quoting hazard).
+_WIN_TTS_PS = r"""
+$ErrorActionPreference = 'Stop'
+$path = '__PATH__'; $rate = __RATE__; $voiceName = '__VOICE__'
+$text = [Console]::In.ReadToEnd()
+Add-Type -AssemblyName System.Speech
+$sapi = New-Object System.Speech.Synthesis.SpeechSynthesizer
+$sapiVoice = $null
+if ($voiceName) {
+    $sapiVoice = $sapi.GetInstalledVoices() | Where-Object {
+        $_.Enabled -and $_.VoiceInfo.Name -eq $voiceName } | Select-Object -First 1
+}
+$winrtVoice = $null
+if ($voiceName -and -not $sapiVoice) {
+    try {
+        [Windows.Media.SpeechSynthesis.SpeechSynthesizer,Windows.Media,ContentType=WindowsRuntime] | Out-Null
+        $winrtVoice = [Windows.Media.SpeechSynthesis.SpeechSynthesizer]::AllVoices | Where-Object {
+            $_.DisplayName -eq $voiceName } | Select-Object -First 1
+    } catch {}
+}
+if ($voiceName -and -not $sapiVoice -and -not $winrtVoice) {
+    $sapiVoice = $sapi.GetInstalledVoices() | Where-Object {
+        $_.Enabled -and $_.VoiceInfo.Name -like "*$voiceName*" } | Select-Object -First 1
+}
+if ($winrtVoice) {
+    $sapi.Dispose()
+    Add-Type -AssemblyName System.Runtime.WindowsRuntime
+    [Windows.Storage.Streams.DataReader,Windows.Storage.Streams,ContentType=WindowsRuntime] | Out-Null
+    $asTask = ([System.WindowsRuntimeSystemExtensions].GetMethods() | Where-Object {
+        $_.Name -eq 'AsTask' -and $_.GetParameters().Count -eq 1 -and
+        $_.GetParameters()[0].ParameterType.Name -eq 'IAsyncOperation`1' })[0]
+    function Await($op, $t) {
+        $k = $asTask.MakeGenericMethod($t).Invoke($null, @($op)); $k.Wait(-1) | Out-Null; $k.Result }
+    $synth = New-Object Windows.Media.SpeechSynthesis.SpeechSynthesizer
+    $synth.Voice = $winrtVoice
+    $synth.Options.SpeakingRate = __WRATE__
+    $stream = Await ($synth.SynthesizeTextToStreamAsync($text)) ([Windows.Media.SpeechSynthesis.SpeechSynthesisStream])
+    $reader = New-Object Windows.Storage.Streams.DataReader($stream)
+    Await ($reader.LoadAsync([uint32]$stream.Size)) ([uint32]) | Out-Null
+    $bytes = New-Object byte[] $stream.Size
+    $reader.ReadBytes($bytes)
+    [System.IO.File]::WriteAllBytes($path, $bytes)
+    $synth.Dispose()
+} else {
+    if ($sapiVoice) { $sapi.SelectVoice($sapiVoice.VoiceInfo.Name) }
+    $sapi.Rate = $rate
+    $sapi.SetOutputToWaveFile($path)
+    $sapi.Speak($text)
+    $sapi.Dispose()
+}
+"""
+
+
 def synth_tts_wav(text, wav_path, voice=None, rate=0):
     """Render text to a wav file with the OS speech engine (blocking).
-    Windows: SAPI via PowerShell. Fallbacks: macOS `say`, else espeak.
-    `voice` is a name substring (None = engine default); `rate` is the SAPI
-    -10..10 scale, mapped to words/minute for say/espeak. The text travels
-    over stdin so no shell-quoting issue can arise."""
+    Windows: SAPI5 or, for OneCore/natural voices, WinRT - chosen by the
+    selected voice (see _WIN_TTS_PS). Fallbacks: macOS `say`, else espeak.
+    `voice` is a name (None = engine default); `rate` is the SAPI -10..10
+    scale, mapped to words/minute for say/espeak. The text travels over
+    stdin so no shell-quoting issue can arise."""
     rate = int(max(-10, min(10, rate)))
     wpm = int(175 * 2.0 ** (rate / 10.0))      # say/espeak equivalent
     if sys.platform == "win32":
-        path_lit = str(wav_path).replace("'", "''")
-        sel = ""
-        if voice:
-            v_lit = str(voice).replace("'", "''")
-            sel = ("$v = $s.GetInstalledVoices() | Where-Object "
-                   f"{{ $_.VoiceInfo.Name -like '*{v_lit}*' }} "
-                   "| Select-Object -First 1; "
-                   "if ($v) { $s.SelectVoice($v.VoiceInfo.Name) }; ")
-        cmd = ["powershell", "-NoProfile", "-NonInteractive", "-Command",
-               "Add-Type -AssemblyName System.Speech; "
-               "$s = New-Object System.Speech.Synthesis.SpeechSynthesizer; "
-               f"$s.Rate = {rate}; " + sel +
-               f"$s.SetOutputToWaveFile('{path_lit}'); "
-               "$s.Speak([Console]::In.ReadToEnd()); $s.Dispose()"]
+        script = (_WIN_TTS_PS
+                  .replace("__PATH__", str(wav_path).replace("'", "''"))
+                  .replace("__VOICE__", str(voice or "").replace("'", "''"))
+                  .replace("__RATE__", str(rate))
+                  .replace("__WRATE__", f"{winrt_speaking_rate(rate):.4f}"))
+        cmd = ["powershell", "-NoProfile", "-NonInteractive", "-Command", script]
     elif sys.platform == "darwin":
         cmd = ["say", "-o", str(wav_path), "--data-format=LEI16@22050"]
         if voice:
@@ -60,20 +119,42 @@ def synth_tts_wav(text, wav_path, voice=None, rate=0):
         raise RuntimeError(detail[-1][:80] if detail else "speech engine failed")
 
 
+# Lists both engines: SAPI5 (System.Speech) first, then OneCore (WinRT) - the
+# latter wrapped in try/catch so an older Windows without it just yields SAPI.
+_WIN_LIST_PS = r"""
+Add-Type -AssemblyName System.Speech
+(New-Object System.Speech.Synthesis.SpeechSynthesizer).GetInstalledVoices() |
+    Where-Object { $_.Enabled } | ForEach-Object { $_.VoiceInfo.Name }
+try {
+    [Windows.Media.SpeechSynthesis.SpeechSynthesizer,Windows.Media,ContentType=WindowsRuntime] | Out-Null
+    [Windows.Media.SpeechSynthesis.SpeechSynthesizer]::AllVoices | ForEach-Object { $_.DisplayName }
+} catch {}
+"""
+
+
+def _dedup(names):
+    """Drop blanks and duplicates, preserving first-seen order (SAPI wins)."""
+    out, seen = [], set()
+    for n in names:
+        n = n.strip()
+        if n and n not in seen:
+            seen.add(n)
+            out.append(n)
+    return out
+
+
 def list_tts_voices():
     """Installed TTS voice names, for the "TTS voice" menu row (blocking;
-    runs on a background thread). Empty list on any failure."""
+    runs on a background thread). On Windows this spans both the classic
+    SAPI5 voices and the modern OneCore/natural voices. Empty on failure."""
     kw = dict(text=True, capture_output=True, timeout=20,
               creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
     try:
         if sys.platform == "win32":
             r = subprocess.run(
                 ["powershell", "-NoProfile", "-NonInteractive", "-Command",
-                 "Add-Type -AssemblyName System.Speech; "
-                 "(New-Object System.Speech.Synthesis.SpeechSynthesizer)"
-                 ".GetInstalledVoices() "
-                 "| ForEach-Object { $_.VoiceInfo.Name }"], **kw)
-            return [ln.strip() for ln in r.stdout.splitlines() if ln.strip()]
+                 _WIN_LIST_PS], **kw)
+            return _dedup(r.stdout.splitlines())
         if sys.platform == "darwin":
             r = subprocess.run(["say", "-v", "?"], **kw)
             return [ln.split()[0] for ln in r.stdout.splitlines() if ln.split()]

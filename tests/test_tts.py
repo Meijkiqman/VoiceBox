@@ -349,4 +349,27 @@ rrow.select()
 check("rate select resets to normal",
       vstate.tts_rate == 0.0 and rrow.value_fn() == "normal")
 
+# ------------------------------------------------- multi-engine voice helpers
+check("WinRT rate: normal maps to 1.0", voicebox.winrt_speaking_rate(0) == 1.0)
+check("WinRT rate: +10 doubles the pace",
+      abs(voicebox.winrt_speaking_rate(10) - 2.0) < 1e-9)
+check("WinRT rate: -10 halves the pace",
+      abs(voicebox.winrt_speaking_rate(-10) - 0.5) < 1e-9)
+check("WinRT rate clamps to the engine's 0.5..6.0 band",
+      voicebox.winrt_speaking_rate(-40) == 0.5
+      and voicebox.winrt_speaking_rate(40) == 6.0)
+check("voice list dedups + orders SAPI before OneCore",
+      voicebox.tts._dedup(
+          ["Zira", " Zira ", "", "Jon", "David", "Jon"])
+      == ["Zira", "Jon", "David"])
+# the Windows render script routes an exact OneCore-only name to WinRT
+if hasattr(voicebox.tts, "_WIN_TTS_PS"):
+    script = (voicebox.tts._WIN_TTS_PS
+              .replace("__PATH__", "x").replace("__VOICE__", "Microsoft Jon")
+              .replace("__RATE__", "0").replace("__WRATE__", "1.0"))
+    check("render script carries both engines + the exact-match guard",
+          "System.Speech" in script
+          and "Windows.Media.SpeechSynthesis" in script
+          and "-eq $voiceName" in script)
+
 finish()
