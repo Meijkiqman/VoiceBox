@@ -13,10 +13,11 @@ class AiVoice:
     worker is live, VoiceBox mutes its own voice path (state.ai_mute) so the
     cable carries only the converted voice - the soundboard keeps mixing."""
 
-    def __init__(self, state, rvc_dir=None):
+    def __init__(self, state, rvc_dir=None, monitor=None):
         self.state = state
         rvc_dir = rvc_dir or getattr(state, "rvc_dir", None)
         self.rvc_dir = Path(rvc_dir) if rvc_dir else RVC_DIR
+        self.monitor = monitor             # self-listen: worker mirrors voice
         self.proc = None
         self.status = "off"                # off | loading... | ON | error
         self.voices = self._scan()
@@ -50,9 +51,14 @@ class AiVoice:
         return self.voices[self.sel].stem if self.voices else "-"
 
     def cycle(self, d):
-        if not self.voices:
+        if self.voices:
+            self.select((self.sel + d) % len(self.voices))
+
+    def select(self, i):
+        """Jump straight to voice i (dropdown pick); live switch restarts."""
+        if not self.voices or not (0 <= i < len(self.voices)) or i == self.sel:
             return
-        self.sel = (self.sel + d) % len(self.voices)
+        self.sel = i
         if self.proc is not None:          # live switch: restart on new voice
             self.stop()
             self.start()
@@ -70,6 +76,18 @@ class AiVoice:
             return True
         except Exception:
             return False
+
+    def set_monitor(self, on):
+        """Tell a live worker to mirror the converted voice to the speakers
+        ("hear myself" while the AI owns the voice path). No-op when off."""
+        proc = self.proc
+        if proc is None or getattr(proc, "stdin", None) is None:
+            return
+        try:
+            proc.stdin.write(f"MONITOR {1 if on else 0}\n")
+            proc.stdin.flush()
+        except Exception:
+            pass
 
     def toggle(self):
         if self.proc is not None:
@@ -93,6 +111,8 @@ class AiVoice:
             cmd += ["--index", index]
         if isinstance(in_match, str) and in_match:
             cmd += ["--input-device", in_match]
+        if self.monitor is not None and self.monitor.on:
+            cmd += ["--monitor"]           # self-listen already on at launch
         try:
             self.proc = subprocess.Popen(
                 cmd, cwd=str(self.rvc_dir), text=True,

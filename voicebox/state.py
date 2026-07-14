@@ -140,6 +140,11 @@ class State:
         with self.lock:
             setattr(self, attr, max(lo, min(hi, getattr(self, attr) + delta)))
 
+    def set_val(self, attr, v, lo=0.0, hi=1.5):
+        """Absolute set with clamp (sliders / typed values)."""
+        with self.lock:
+            setattr(self, attr, max(lo, min(hi, float(v))))
+
     def presets_all(self):
         """Built-in presets followed by the user's saved ones."""
         return PRESETS + self.user_presets

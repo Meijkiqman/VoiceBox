@@ -23,16 +23,16 @@ CHANNELS   = 1            # mono processing path
 INPUT_DEVICE_MATCH   = None            # None = system default mic, or e.g. "Microphone"
 OUTPUT_DEVICE_MATCH  = "CABLE Input"   # the virtual cable's INPUT side
 
-WINDOW_SIZE = (960, 660)   # left: settings menu, right: soundboard grid + TTS panel
+WINDOW_SIZE = (960, 660)   # initial + minimum size; the window is resizable
 MAX_CLIPS   = 64           # how many files from ./sounds get indexed
 
-# AI voice (RVC) integration. Point RVC_DIR at an extracted RVC-beta package
-# (must contain runtime\python.exe, weights\*.pth, hubert_base.pt, rmvpe.pt).
-# A "rvc_dir" string in settings.json overrides this constant. The AI rows
-# only appear in the menu when the folder and at least one voice model exist,
-# so machines without RVC are unaffected.
-RVC_DIR = Path(r"H:\Python_Projects\DeepSpeech"
-               r"\Retrieval-based-Voice-Conversion-WebUI-main\RVC-beta0717")
+# AI voice (RVC) integration. RVC_DIR holds a trimmed RVC-beta package
+# (must contain runtime\python.exe, weights\*.pth, hubert_base.pt, rmvpe.pt);
+# ours lives in the rvc\ folder next to this file, so VoiceBox is
+# self-contained. A "rvc_dir" string in settings.json overrides this
+# constant. The AI rows only appear in the menu when the folder and at
+# least one voice model exist, so machines without RVC are unaffected.
+RVC_DIR = BASE_DIR / "rvc"
 
 # Voice presets, cycled with the Preset menu row. "drive" is the grit/growl
 # soft-clip amount; "robot" is the robot/vocoder mix; "reverb"/"echo"/"doubler"

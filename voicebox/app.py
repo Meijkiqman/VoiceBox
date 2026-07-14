@@ -29,7 +29,7 @@ def main():
                       has_main_stream=lambda: engine.stream is not None)
     player = LocalPlayer(state)
     board = Board(state, player, monitor)
-    ai = AiVoice(state)
+    ai = AiVoice(state, monitor=monitor)
     tts = TTSBank(state, player, monitor, ai)
     tts.warm()                    # synthesize saved phrases in the background
     hotkeys = GlobalHotkeys(state, board)

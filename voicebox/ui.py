@@ -10,12 +10,15 @@ from .soundboard import Board
 from .tts import TTSBank
 
 class MenuItem:
-    def __init__(self, label, value_fn=None, select=None, adjust=None, flash=True):
+    def __init__(self, label, value_fn=None, select=None, adjust=None, flash=True,
+                 slider=None):
         self.label = label
         self.value_fn = value_fn      # () -> str shown on the right
         self.select = select          # on_select handler
         self.adjust = adjust          # on_left/on_right handler, adjust(delta)
         self.flash = flash            # flash the row on select (off for Quit)
+        self.slider = slider          # numeric rows: (get, set, lo, hi, unit)
+                                      # unit "pct" (0..hi shown as %) or "st"
 
 
 class Menu:
@@ -46,7 +49,10 @@ class Menu:
             MenuItem("Pitch",
                      lambda: f"{s.semitones:+.0f} st" if s.semitones else "off",
                      select=lambda: s.set_pitch(0),
-                     adjust=lambda d: s.set_pitch(s.semitones + d)),
+                     adjust=lambda d: s.set_pitch(s.semitones + d),
+                     slider=(lambda: s.semitones,
+                             lambda v: s.set_pitch(int(round(v))),
+                             -12, 12, "st")),
             MenuItem("Mic",
                      lambda: "MUTED" if s.mic_muted else "live",
                      select=self.toggle_mute,
@@ -58,32 +64,56 @@ class Menu:
             MenuItem("Robot voice",
                      lambda: f"{s.robot:.0%}" if s.robot else "off",
                      select=self._toggle_robot,
-                     adjust=lambda d: s.nudge("robot", d * 0.05, hi=1.0)),
+                     adjust=lambda d: s.nudge("robot", d * 0.05, hi=1.0),
+                     slider=(lambda: s.robot,
+                             lambda v: s.set_val("robot", v, hi=1.0),
+                             0.0, 1.0, "pct")),
             MenuItem("Helmet doubler",
                      lambda: f"{s.doubler:.0%}" if s.doubler else "off",
-                     adjust=lambda d: s.nudge("doubler", d * 0.05, hi=1.0)),
+                     adjust=lambda d: s.nudge("doubler", d * 0.05, hi=1.0),
+                     slider=(lambda: s.doubler,
+                             lambda v: s.set_val("doubler", v, hi=1.0),
+                             0.0, 1.0, "pct")),
             MenuItem("Grit / growl",
                      lambda: f"{s.drive:.0%}",
-                     adjust=lambda d: s.nudge("drive", d * 0.05, hi=1.0)),
+                     adjust=lambda d: s.nudge("drive", d * 0.05, hi=1.0),
+                     slider=(lambda: s.drive,
+                             lambda v: s.set_val("drive", v, hi=1.0),
+                             0.0, 1.0, "pct")),
             MenuItem("Reverb",
                      lambda: f"{s.reverb:.0%}",
-                     adjust=lambda d: s.nudge("reverb", d * 0.05, hi=1.0)),
+                     adjust=lambda d: s.nudge("reverb", d * 0.05, hi=1.0),
+                     slider=(lambda: s.reverb,
+                             lambda v: s.set_val("reverb", v, hi=1.0),
+                             0.0, 1.0, "pct")),
             MenuItem("Echo",
                      lambda: f"{s.echo:.0%}",
-                     adjust=lambda d: s.nudge("echo", d * 0.05, hi=1.0)),
+                     adjust=lambda d: s.nudge("echo", d * 0.05, hi=1.0),
+                     slider=(lambda: s.echo,
+                             lambda v: s.set_val("echo", v, hi=1.0),
+                             0.0, 1.0, "pct")),
             MenuItem("Radio voice",
                      lambda: "ON" if s.radio else "off",
                      select=self._toggle_radio,
                      adjust=lambda d: self._toggle_radio()),
             MenuItem("Bass boost",
                      lambda: f"{s.bass:.0%}" if s.bass else "off",
-                     adjust=lambda d: s.nudge("bass", d * 0.05, hi=1.0)),
+                     adjust=lambda d: s.nudge("bass", d * 0.05, hi=1.0),
+                     slider=(lambda: s.bass,
+                             lambda v: s.set_val("bass", v, hi=1.0),
+                             0.0, 1.0, "pct")),
             MenuItem("Voice volume",
                      lambda: f"{s.voice_gain:.0%}",
-                     adjust=lambda d: s.nudge("voice_gain", d * 0.05)),
+                     adjust=lambda d: s.nudge("voice_gain", d * 0.05),
+                     slider=(lambda: s.voice_gain,
+                             lambda v: s.set_val("voice_gain", v),
+                             0.0, 1.5, "pct")),
             MenuItem("Clip volume",
                      lambda: f"{s.clip_gain:.0%}",
-                     adjust=lambda d: s.nudge("clip_gain", d * 0.05)),
+                     adjust=lambda d: s.nudge("clip_gain", d * 0.05),
+                     slider=(lambda: s.clip_gain,
+                             lambda v: s.set_val("clip_gain", v),
+                             0.0, 1.5, "pct")),
         ]
         if ai is not None and ai.available:
             self.items.append(MenuItem(
@@ -103,7 +133,10 @@ class Menu:
         self.items.append(MenuItem(
             "TTS volume",
             lambda: f"{s.tts_gain:.0%}",
-            adjust=lambda d: s.nudge("tts_gain", d * 0.05)))
+            adjust=lambda d: s.nudge("tts_gain", d * 0.05),
+            slider=(lambda: s.tts_gain,
+                    lambda v: s.set_val("tts_gain", v),
+                    0.0, 1.5, "pct")))
         if tts is not None:
             tts.load_voice_names()     # listed by the time the row is reached
             self.items.append(MenuItem(
@@ -116,12 +149,6 @@ class Menu:
                 lambda: f"{s.tts_rate:+.0f}" if s.tts_rate else "normal",
                 select=self._reset_tts_rate,
                 adjust=self._adjust_tts_rate))
-        if monitor is not None:
-            self.items.append(MenuItem(
-                "Test - hear myself",
-                lambda: "ON" if monitor.on else "off",
-                select=self._toggle_monitor,
-                adjust=lambda d: self._toggle_monitor()))
         if recorder is not None:
             self.items.append(MenuItem(
                 "Record output",
@@ -221,6 +248,8 @@ class Menu:
 
     def _toggle_monitor(self):
         self.monitor.toggle()
+        if self.ai is not None:        # AI live: the worker mirrors the voice
+            self.ai.set_monitor(self.monitor.on)
         if self.monitor.error:         # surface failures in the status line
             self.state.status_msg = f"test: {self.monitor.error}"
             self.state.status_at = time.time()
@@ -261,7 +290,12 @@ def run_ui(state, stop_flag, dev_line, err_line="", monitor=None, board=None,
     import pygame
     pygame.init()
     pygame.display.set_caption("VoiceBox")
-    screen = pygame.display.set_mode(WINDOW_SIZE)
+    screen = pygame.display.set_mode(WINDOW_SIZE, pygame.RESIZABLE)
+    try:                          # OS-level minimum = the design's base size
+        from pygame._sdl2.video import Window as _SDLWindow
+        _SDLWindow.from_display_module().minimum_size = WINDOW_SIZE
+    except Exception:
+        pass
     clock = pygame.time.Clock()
     pygame.key.set_repeat(320, 110)           # held arrows auto-repeat
 
@@ -440,31 +474,51 @@ def run_ui(state, stop_flag, dev_line, err_line="", monitor=None, board=None,
     # ----------------------------------------------------- layout (tokens JSON)
     HEADER_H, FOOTER_H = 52, 32
     LEFT_W = 370
-    VIEW_TOP, VIEW_BOT = HEADER_H, WINDOW_SIZE[1] - FOOTER_H
-    VIEW_H = VIEW_BOT - VIEW_TOP
+    VIEW_TOP = HEADER_H
     L_X, L_RIGHT = 10, LEFT_W - 14
     L_W = L_RIGHT - L_X
     ROW_HGT, ROW_GAP = 34, 2
     HDR_FIRST, HDR_HGT = 24, 30
     LIST_PAD_TOP = 6
     G_X = LEFT_W + 14
-    G_RIGHT = WINDOW_SIZE[0] - 14 - 8          # 8px scroll gutter
     COLS, GGAP, TILE_H = 3, 8, 62
-    TILE_W = (G_RIGHT - G_X - GGAP * (COLS - 1)) // COLS
     STRIP_Y, STRIP_H = VIEW_TOP + 10, 30
     GRID_TOP = STRIP_Y + STRIP_H + 10
-    LIST_RECT = pygame.Rect(0, VIEW_TOP, LEFT_W, VIEW_H)
     # TTS panel: bottom strip of the right pane (header / input / phrase list)
     TTS_H = 210
-    TTS_TOP = VIEW_BOT - TTS_H
-    TTS_IN_Y, TTS_IN_H = TTS_TOP + 30, 30
-    TTS_LIST_TOP = TTS_IN_Y + TTS_IN_H + 8
+    TTS_IN_H = 30
     TTS_ROW_H, TTS_ROW_GAP = 30, 2
-    TTS_LIST_RECT = pygame.Rect(LEFT_W + 1, TTS_LIST_TOP,
-                                WINDOW_SIZE[0] - LEFT_W - 1,
-                                VIEW_BOT - TTS_LIST_TOP)
-    GRID_RECT = pygame.Rect(LEFT_W + 1, GRID_TOP, WINDOW_SIZE[0] - LEFT_W - 1,
-                            TTS_TOP - GRID_TOP)
+
+    # window-size-dependent geometry, owned by relayout(): the window is
+    # resizable (drag edges / Aero snap); the left pane keeps its width, the
+    # soundboard grid and TTS panel absorb the extra space.
+    WIN_W = WIN_H = 0
+    VIEW_BOT = VIEW_H = G_RIGHT = TILE_W = 0
+    TTS_TOP = TTS_IN_Y = TTS_LIST_TOP = 0
+    LIST_RECT = TTS_LIST_RECT = GRID_RECT = None
+
+    def relayout():
+        nonlocal WIN_W, WIN_H, VIEW_BOT, VIEW_H, G_RIGHT, TILE_W, TTS_TOP, \
+            TTS_IN_Y, TTS_LIST_TOP, LIST_RECT, TTS_LIST_RECT, GRID_RECT
+        # layout never goes below the design's base size, even if the OS
+        # ignores the window minimum (drawing past the surface just clips)
+        WIN_W = max(screen.get_width(), WINDOW_SIZE[0])
+        WIN_H = max(screen.get_height(), WINDOW_SIZE[1])
+        VIEW_BOT = WIN_H - FOOTER_H
+        VIEW_H = VIEW_BOT - VIEW_TOP
+        G_RIGHT = WIN_W - 14 - 8               # 8px scroll gutter
+        TILE_W = (G_RIGHT - G_X - GGAP * (COLS - 1)) // COLS
+        LIST_RECT = pygame.Rect(0, VIEW_TOP, LEFT_W, VIEW_H)
+        TTS_TOP = VIEW_BOT - TTS_H
+        TTS_IN_Y = TTS_TOP + 30
+        TTS_LIST_TOP = TTS_IN_Y + TTS_IN_H + 8
+        TTS_LIST_RECT = pygame.Rect(LEFT_W + 1, TTS_LIST_TOP,
+                                    WIN_W - LEFT_W - 1,
+                                    VIEW_BOT - TTS_LIST_TOP)
+        GRID_RECT = pygame.Rect(LEFT_W + 1, GRID_TOP, WIN_W - LEFT_W - 1,
+                                TTS_TOP - GRID_TOP)
+        # tile width follows the window: re-truncate + measure grid labels
+        rebuild_grid()
 
     SECTION_OF = {
         "Preset": "VOICE", "Save preset": "VOICE", "Pitch": "VOICE",
@@ -478,8 +532,7 @@ def run_ui(state, stop_flag, dev_line, err_line="", monitor=None, board=None,
         "TTS voice": "TTS", "TTS rate": "TTS",
         "Sounds to mic": "SOUNDS", "Pause sounds": "SOUNDS",
         "Stop all sounds": "SOUNDS", "Rescan sounds": "SOUNDS",
-        "Test - hear myself": "SYSTEM", "Record output": "SYSTEM",
-        "Global hotkeys": "SYSTEM",
+        "Record output": "SYSTEM", "Global hotkeys": "SYSTEM",
         "Input device": "DEVICES", "Output device": "DEVICES",
         "Quit": "SYSTEM",
     }
@@ -521,7 +574,7 @@ def run_ui(state, stop_flag, dev_line, err_line="", monitor=None, board=None,
                 nm += "..."
             disp_names.append(nm)
             clip_secs.append(f"{len(c) / SAMPLERATE:.1f}s")
-    rebuild_grid()
+    relayout()
 
     # ----------------------------------------------------------- motion state
     list_scroll = list_target = 0.0
@@ -538,6 +591,9 @@ def run_ui(state, stop_flag, dev_line, err_line="", monitor=None, board=None,
     row_hit, strip_hit, grid_hit = {}, {}, {}
     tts_row_hit, tts_del_hit, tts_btn_hit = {}, {}, {}
     arrow_hit = None              # (row, "<" rect, ">" rect) from the last draw
+    slider_hit, slider_track, value_hit = {}, {}, {}   # numeric rows, per draw
+    slider_drag = None            # row index while a slider knob is dragged
+    edit = None                   # {"row": i, "text": str} while typing a value
     last_t = time.time()
 
     def step(cur, target, dt, dur):
@@ -598,6 +654,47 @@ def run_ui(state, stop_flag, dev_line, err_line="", monitor=None, board=None,
         menu.on_right()
         nudge.update(i=menu.sel, at=time.time(), side=+1)
 
+    # ---- numeric rows: slider drag + click-the-number-to-type ---------------
+    def slider_set_from_x(i, mx):
+        tr = slider_track.get(i)
+        if tr is None:
+            return
+        _get, set_, lo, hi, unit = menu.items[i].slider
+        frac = max(0.0, min(1.0, (mx - tr.x) / max(1, tr.w)))
+        v = lo + frac * (hi - lo)
+        set_(int(round(v)) if unit == "st" else v)
+
+    def edit_open(i):
+        nonlocal edit
+        tts_set_focus(False)
+        edit = {"row": i, "text": ""}   # empty box; current value = placeholder
+        try:
+            pygame.key.start_text_input()
+        except Exception:
+            pass
+
+    def edit_close():
+        nonlocal edit
+        edit = None
+        if not tts_focus:
+            try:
+                pygame.key.stop_text_input()
+            except Exception:
+                pass
+
+    def edit_commit():
+        if edit is not None and edit["text"].strip():
+            _get, set_, lo, hi, unit = menu.items[edit["row"]].slider
+            try:
+                v = float(edit["text"].replace(",", ".").strip())
+            except ValueError:
+                v = None
+            if v is not None:
+                if unit == "pct":
+                    v /= 100.0
+                set_(max(lo, min(hi, int(round(v)) if unit == "st" else v)))
+        edit_close()
+
     def val_style(val, focused, now):
         """(font, text color, LED dot color or None) by value semantics."""
         if val == "ON":
@@ -620,8 +717,74 @@ def run_ui(state, stop_flag, dev_line, err_line="", monitor=None, board=None,
             return f_valF, CLR["accent"], None
         return f_val, CLR["text"], None
 
+    def draw_slider(r, i, it, val, focused, now):
+        """Numeric row: label | slider track+knob | value (click to type)."""
+        get, _set, lo, hi, _unit = it.slider
+        cy = r.centery
+        cur = float(get())
+        frac = max(0.0, min(1.0, (cur - lo) / (hi - lo) if hi != lo else 0.0))
+        # value on the right: an input box while editing, else clickable text
+        if edit is not None and edit["row"] == i:
+            box = pygame.Rect(r.right - 8 - 54, cy - 11, 54, 22)
+            screen.blit(grad(box.w, box.h, CLR["headerBot"], CLR["paneLeft"], 5),
+                        box.topleft)
+            pygame.draw.rect(screen, CLR["accent"], box, width=1, border_radius=5)
+            txt = edit["text"]
+            if txt:
+                ts = T(f_valF, txt, CLR["text"])
+            else:                          # empty: current value as placeholder
+                ts = T(f_val, val, CLR["faint"])
+            tx = box.right - 6 - ts.get_width()
+            screen.blit(ts, (tx, cy - ts.get_height() // 2))
+            if txt and (now * 2.0) % 2 < 1:
+                pygame.draw.line(screen, CLR["accent"],
+                                 (box.right - 5, cy - 7), (box.right - 5, cy + 7))
+            value_hit[i] = box
+            val_left = box.x
+        else:
+            n_hot = nudge["i"] == i and (now - nudge["at"]) < 0.18
+            fnt, col, _dot = val_style(val, focused, now)
+            ts = T(f_valF if focused else fnt, val,
+                   CLR["accentBright"] if n_hot else
+                   (CLR["accent"] if focused else col))
+            vr = pygame.Rect(r.right - 10 - ts.get_width(),
+                             cy - ts.get_height() // 2,
+                             ts.get_width(), ts.get_height())
+            vh = q8(hover_step(("val", i), vr.inflate(12, 10)
+                               .collidepoint(mouse_pos), dt))
+            if vh > 0.3:                   # hint: the number is clickable
+                pygame.draw.rect(screen, mixc(CLR["paneLeft"], CLR["accent"], 0.35),
+                                 vr.inflate(12, 8), width=1, border_radius=5)
+            screen.blit(ts, vr.topleft)
+            value_hit[i] = vr.inflate(12, 10)
+            val_left = vr.x - 6
+        # slider track + knob in the middle of the row
+        tx1 = min(val_left - 12, r.right - 10 - 54 - 12)
+        tx0 = max(r.x + 148, tx1 - 124)
+        track = pygame.Rect(tx0, cy - 2, tx1 - tx0, 4)
+        pygame.draw.rect(screen, CLR["barTrack"], track, border_radius=2)
+        if frac > 0.01:
+            pygame.draw.rect(screen, CLR["accent"] if focused else CLR["barFill"],
+                             pygame.Rect(track.x, track.y,
+                                         max(2, int(track.w * frac)), 4),
+                             border_radius=2)
+        kx = track.x + int(track.w * frac)
+        kh = q8(hover_step(("knob", i),
+                           slider_drag == i
+                           or track.inflate(10, 14).collidepoint(mouse_pos), dt))
+        pygame.draw.circle(screen, CLR["paneLeft"], (kx, cy), 7)
+        pygame.draw.circle(screen,
+                           mixc(CLR["accent"] if focused else CLR["muted"],
+                                CLR["accentBright"], kh),
+                           (kx, cy), 5)
+        slider_track[i] = track
+        slider_hit[i] = track.inflate(12, 16)
+
     def draw_value(r, i, it, val, focused, now):
         nonlocal arrow_hit
+        if it.slider is not None:
+            draw_slider(r, i, it, val, focused, now)
+            return
         cy = r.centery
         is_pct = val.endswith("%")
         n_hot = nudge["i"] == i and (now - nudge["at"]) < 0.18
@@ -680,6 +843,105 @@ def run_ui(state, stop_flag, dev_line, err_line="", monitor=None, board=None,
                 if dot:
                     pygame.draw.circle(screen, dot, (right - vs.get_width() - 10, cy), 2)
 
+    # -------------------------------------- dropdown picker (Preset / AI voice)
+    # Pressing the Preset or AI character row opens an alphabetical list
+    # anchored to the row; while open it owns keyboard, mouse and controller.
+    DROP_ROWS = ("Preset", "AI character")
+    drop = None                   # dict(items, rect, sel, cur, scroll, ...) | None
+
+    def open_dropdown(row_idx):
+        nonlocal drop
+        label = menu.items[row_idx].label
+        if label == "Preset":
+            presets = state.presets_all()      # built-ins + user presets
+            entries = sorted(((nm, i) for i, (nm, _p) in enumerate(presets)),
+                             key=lambda e: e[0].lower())
+            items = [(nm, lambda i=i: state.apply_preset(i))
+                     for nm, i in entries]
+            cur = next((k for k, (_nm, i) in enumerate(entries)
+                        if i == state.preset_idx), 0)
+        elif ai is not None:
+            entries = sorted(((p.stem, i) for i, p in enumerate(ai.voices)),
+                             key=lambda e: e[0].lower())
+            items = [(nm, lambda i=i: ai.select(i)) for nm, i in entries]
+            cur = next((k for k, (_nm, i) in enumerate(entries)
+                        if i == ai.sel), 0)
+        else:
+            return
+        item_h, pad = 28, 4
+        ry = VIEW_TOP - int(list_scroll) + row_pos[row_idx]
+        want = len(items) * item_h + pad * 2
+        below = VIEW_BOT - 6 - (ry + ROW_HGT + 4)
+        above = ry - 4 - (VIEW_TOP + 6)
+        if below >= min(want, 200) or below >= above:
+            h, y = min(want, below), ry + ROW_HGT + 4
+        else:
+            h, y = min(want, above), ry - 4 - min(want, above)
+        rect = pygame.Rect(L_X + 10, y, L_W - 20, h)
+        max_scroll = max(0, want - h)
+        scroll = min(max_scroll,
+                     max(0, cur * item_h + pad - (h - item_h) // 2))
+        drop = {"items": items, "rect": rect, "item_h": item_h, "pad": pad,
+                "sel": cur, "cur": cur, "scroll": scroll,
+                "max_scroll": max_scroll, "row": row_idx, "mouse": None}
+
+    def drop_pick():
+        nonlocal drop
+        if drop and 0 <= drop["sel"] < len(drop["items"]):
+            drop["items"][drop["sel"]][1]()
+            menu.flash[drop["row"]] = time.time() + 0.25
+        drop = None
+
+    def drop_nav(d):
+        drop["sel"] = (drop["sel"] + d) % len(drop["items"])
+        view_h = drop["rect"].h - drop["pad"] * 2
+        top = drop["sel"] * drop["item_h"]
+        if top < drop["scroll"]:
+            drop["scroll"] = top
+        elif top + drop["item_h"] > drop["scroll"] + view_h:
+            drop["scroll"] = top + drop["item_h"] - view_h
+
+    def drop_event(event):
+        """All input routes here while the picker is open."""
+        nonlocal drop
+        if event.type == pygame.KEYDOWN:
+            held_keys.add(event.key)
+            act = key_action(event.key)
+            if   act == "up":     drop_nav(-1)
+            elif act == "down":   drop_nav(+1)
+            elif act == "select": drop_pick()
+            elif act == "back" or event.key == pygame.K_ESCAPE:
+                drop = None
+        elif event.type == pygame.MOUSEWHEEL:
+            drop["scroll"] = max(0, min(drop["max_scroll"],
+                                        drop["scroll"]
+                                        - event.y * drop["item_h"]))
+        elif event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
+            r = drop["rect"]
+            if r.collidepoint(event.pos):
+                i = (event.pos[1] - r.y - drop["pad"]
+                     + int(drop["scroll"])) // drop["item_h"]
+                if 0 <= i < len(drop["items"]):
+                    drop["sel"] = i
+                    drop_pick()
+            else:
+                drop = None                # click elsewhere just closes
+        elif event.type == pygame.MOUSEBUTTONDOWN:
+            drop = None
+        elif event.type == pygame.JOYBUTTONDOWN:
+            if   event.button in pad_select: drop_pick()
+            elif event.button in pad_back:   drop = None
+        elif event.type == pygame.JOYHATMOTION and event.value != (0, 0):
+            if   event.value[1] ==  1: drop_nav(-1)
+            elif event.value[1] == -1: drop_nav(+1)
+
+    def do_select():
+        """Row select: dropdown rows open the picker, the rest act directly."""
+        if menu.items[menu.sel].label in DROP_ROWS:
+            open_dropdown(menu.sel)
+        else:
+            menu.on_select()
+
     # ================================================================== loop
     while not stop_flag.is_set():
         now = time.time()
@@ -693,14 +955,42 @@ def run_ui(state, stop_flag, dev_line, err_line="", monitor=None, board=None,
             if event.type == pygame.QUIT:
                 stop_flag.set()
 
+            elif event.type == pygame.VIDEORESIZE:
+                screen = pygame.display.set_mode((event.w, event.h),
+                                                 pygame.RESIZABLE)
+                relayout()
+
+            elif drop is not None and event.type in (
+                    pygame.KEYDOWN, pygame.KEYUP, pygame.MOUSEBUTTONDOWN,
+                    pygame.MOUSEWHEEL, pygame.MOUSEMOTION,
+                    pygame.JOYBUTTONDOWN, pygame.JOYHATMOTION,
+                    pygame.JOYAXISMOTION):
+                if event.type == pygame.KEYUP:
+                    held_keys.discard(event.key)
+                else:
+                    drop_event(event)
+
             elif event.type == pygame.JOYDEVICEADDED:
                 pygame.joystick.Joystick(event.device_index).init()
             elif event.type == pygame.JOYDEVICEREMOVED:
                 pass                                   # instance dies on its own
 
             elif event.type == pygame.TEXTINPUT:
-                if tts_focus:
+                if edit is not None:
+                    if all(c in "0123456789.,+-" for c in event.text):
+                        edit["text"] = (edit["text"] + event.text)[:6]
+                elif tts_focus:
                     tts_text = (tts_text + event.text)[:TTS_MAX_CHARS]
+
+            elif event.type == pygame.KEYDOWN and edit is not None:
+                # the value box owns the keyboard (digits are clip hotkeys!)
+                held_keys.add(event.key)
+                if event.key == pygame.K_BACKSPACE:
+                    edit["text"] = edit["text"][:-1]
+                elif event.key in (pygame.K_RETURN, pygame.K_KP_ENTER):
+                    edit_commit()
+                elif event.key == pygame.K_ESCAPE:
+                    edit_close()
 
             elif event.type == pygame.KEYDOWN and tts_focus:
                 # the textbox owns the keyboard: no menu nav, no clip hotkeys
@@ -727,7 +1017,7 @@ def run_ui(state, stop_flag, dev_line, err_line="", monitor=None, board=None,
                 elif act == "left":       go_left()
                 elif act == "right":      go_right()
                 elif repeat:              pass
-                elif act == "select":     menu.on_select()
+                elif act == "select":     do_select()
                 elif act == "back":       menu.on_back()
                 elif act == "stop_clips": board.stop()
                 elif act == "mute":       menu.toggle_mute()
@@ -740,9 +1030,15 @@ def run_ui(state, stop_flag, dev_line, err_line="", monitor=None, board=None,
                 held_keys.clear()         # KEYUPs are lost on focus change
 
             elif event.type == pygame.MOUSEMOTION:
-                idx = row_at(event.pos)
-                if idx is not None:
-                    menu.sel = idx
+                if slider_drag is not None:        # live drag: follow the mouse
+                    slider_set_from_x(slider_drag, event.pos[0])
+                else:
+                    idx = row_at(event.pos)
+                    if idx is not None:
+                        menu.sel = idx
+
+            elif event.type == pygame.MOUSEBUTTONUP and event.button == 1:
+                slider_drag = None
 
             elif event.type == pygame.MOUSEWHEEL:
                 mx, my = pygame.mouse.get_pos()
@@ -757,6 +1053,10 @@ def run_ui(state, stop_flag, dev_line, err_line="", monitor=None, board=None,
             elif event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
                 in_r = tts_btn_hit.get("input")
                 tts_set_focus(in_r is not None and in_r.collidepoint(event.pos))
+                if edit is not None and not value_hit.get(
+                        edit["row"],
+                        pygame.Rect(0, 0, 0, 0)).collidepoint(event.pos):
+                    edit_commit()          # clicking elsewhere confirms it
                 hit = next((k for k, r in strip_hit.items()
                             if r.collidepoint(event.pos)), None)
                 if hit is not None:
@@ -767,6 +1067,8 @@ def run_ui(state, stop_flag, dev_line, err_line="", monitor=None, board=None,
                     board.toggle_pause()
                 elif hit == "stop":
                     board.stop()
+                elif hit == "hear":
+                    menu._toggle_monitor()
                 elif hit == "page":
                     flip_page(+1)
                 elif (r := tts_btn_hit.get("add")) is not None \
@@ -785,6 +1087,15 @@ def run_ui(state, stop_flag, dev_line, err_line="", monitor=None, board=None,
                         ci := next((c for c, r in grid_hit.items()
                                     if r.collidepoint(event.pos)), None)) is not None:
                     board.play(ci)
+                elif (si := next((k for k, rr in slider_hit.items()
+                                  if rr.collidepoint(event.pos)), None)) is not None:
+                    menu.sel = si
+                    slider_drag = si       # jump to the click, then live-drag
+                    slider_set_from_x(si, event.pos[0])
+                elif (vi := next((k for k, rr in value_hit.items()
+                                  if rr.collidepoint(event.pos)), None)) is not None:
+                    menu.sel = vi
+                    edit_open(vi)          # type the number directly
                 else:
                     idx = row_at(event.pos)
                     if idx is not None:
@@ -795,11 +1106,13 @@ def run_ui(state, stop_flag, dev_line, err_line="", monitor=None, board=None,
                             go_left()
                         elif it.adjust and on_row and arrow_hit[2].collidepoint(event.pos):
                             go_right()
+                        elif it.label in DROP_ROWS:
+                            open_dropdown(idx)
                         elif it.select:
                             menu.on_select()
 
             elif event.type == pygame.JOYBUTTONDOWN:
-                if   event.button in pad_select: menu.on_select()
+                if   event.button in pad_select: do_select()
                 elif event.button in pad_back:   menu.on_back()
                 elif event.button in pad_stop:   board.stop()
 
@@ -830,10 +1143,10 @@ def run_ui(state, stop_flag, dev_line, err_line="", monitor=None, board=None,
         screen.fill(CLR["bg"])
 
         # header: wordmark + segmented mic meter
-        screen.blit(grad(WINDOW_SIZE[0], HEADER_H, CLR["headerTop"], CLR["headerBot"]),
+        screen.blit(grad(WIN_W, HEADER_H, CLR["headerTop"], CLR["headerBot"]),
                     (0, 0))
         pygame.draw.line(screen, CLR["strokeSoft"], (0, HEADER_H - 1),
-                         (WINDOW_SIZE[0], HEADER_H - 1))
+                         (WIN_W, HEADER_H - 1))
         bx = 16
         for bh in (6, 13, 9, 16):
             pygame.draw.rect(screen, CLR["accent"],
@@ -857,7 +1170,7 @@ def run_ui(state, stop_flag, dev_line, err_line="", monitor=None, board=None,
             peak_lit, peak_at = meter_lit, now
         elif now - peak_at > 0.9:                      # hold 900ms, fall 300ms
             peak_lit = max(meter_lit, peak_lit - dt / 0.300 * 22.0)
-        mx_right = WINDOW_SIZE[0] - 16
+        mx_right = WIN_W - 16
         db_s = (T(f_small, "MUTED", CLR["danger"]) if state.mic_muted
                 else T(f_small, f"{max(db, -60.0):5.1f} dB", CLR["muted"]))
         screen.blit(db_s, (mx_right - db_s.get_width(),
@@ -894,6 +1207,9 @@ def run_ui(state, stop_flag, dev_line, err_line="", monitor=None, board=None,
 
         screen.set_clip(LIST_RECT)
         row_hit.clear()
+        slider_hit.clear()
+        slider_track.clear()
+        value_hit.clear()
         arrow_hit = None
         base_y = VIEW_TOP - int(list_scroll)
 
@@ -974,6 +1290,10 @@ def run_ui(state, stop_flag, dev_line, err_line="", monitor=None, board=None,
              state.clips_paused, CLR["warning"], WARN_TINT),
             ("stop", "STOP", False, CLR["accent"], None),
         ]
+        if monitor is not None:            # self-listen toggle ("hear myself")
+            strip_defs.append(
+                ("hear", "HEAR: ON" if monitor.on else "HEAR: OFF",
+                 monitor.on, CLR["accent"], ACCENT_TINT))
         n_pages = board.page_count()
         if n_pages > 1:                # hotkey page chip; click steps onward
             strip_defs.append(("page",
@@ -1103,7 +1423,7 @@ def run_ui(state, stop_flag, dev_line, err_line="", monitor=None, board=None,
         screen.blit(grad(GRID_RECT.width - 8, 26, (11, 13, 16, 0), (11, 13, 16, 255)),
                     (GRID_RECT.x, GRID_RECT.bottom - 26))
         if grid_content_h > GRID_RECT.height:
-            track = pygame.Rect(WINDOW_SIZE[0] - 17, GRID_TOP + 4, 3,
+            track = pygame.Rect(WIN_W - 17, GRID_TOP + 4, 3,
                                 GRID_RECT.height - 8)
             pygame.draw.rect(screen, CLR["scrollTrack"], track, border_radius=2)
             th = max(24, int(track.height * GRID_RECT.height / grid_content_h))
@@ -1116,7 +1436,7 @@ def run_ui(state, stop_flag, dev_line, err_line="", monitor=None, board=None,
 
         # ------------------------------------------------- right pane: TTS panel
         pygame.draw.line(screen, CLR["strokeSoft"], (LEFT_W + 1, TTS_TOP),
-                         (WINDOW_SIZE[0], TTS_TOP))
+                         (WIN_W, TTS_TOP))
         tts_btn_hit.clear()
         hs = TT(f_hdr, "TEXT TO SPEECH", CLR["faint"], 2)
         screen.blit(hs, (G_X + 4, TTS_TOP + 10))
@@ -1295,7 +1615,7 @@ def run_ui(state, stop_flag, dev_line, err_line="", monitor=None, board=None,
                          (11, 13, 16, 255)),
                     (TTS_LIST_RECT.x, VIEW_BOT - 20))
         if tts_content_h > TTS_LIST_RECT.height:
-            track = pygame.Rect(WINDOW_SIZE[0] - 17, TTS_LIST_TOP + 2, 3,
+            track = pygame.Rect(WIN_W - 17, TTS_LIST_TOP + 2, 3,
                                 TTS_LIST_RECT.height - 4)
             pygame.draw.rect(screen, CLR["scrollTrack"], track, border_radius=2)
             th = max(18, int(track.height * TTS_LIST_RECT.height / tts_content_h))
@@ -1307,10 +1627,10 @@ def run_ui(state, stop_flag, dev_line, err_line="", monitor=None, board=None,
         screen.set_clip(None)
 
         # ------------------------------------------------------------ footer
-        screen.blit(grad(WINDOW_SIZE[0], FOOTER_H, CLR["footerTop"], CLR["footerBot"]),
+        screen.blit(grad(WIN_W, FOOTER_H, CLR["footerTop"], CLR["footerBot"]),
                     (0, VIEW_BOT))
         pygame.draw.line(screen, CLR["strokeSoft"], (0, VIEW_BOT),
-                         (WINDOW_SIZE[0], VIEW_BOT))
+                         (WIN_W, VIEW_BOT))
         fy = VIEW_BOT + FOOTER_H // 2
         # live values: the engine's device line changes when devices are
         # switched from the menu
@@ -1341,7 +1661,7 @@ def run_ui(state, stop_flag, dev_line, err_line="", monitor=None, board=None,
                 stat += f" · {state.status_count} drops"
             ss = T(f_foot, stat,
                    CLR["warning"] if state.status_count else CLR["faint"])
-            screen.blit(ss, (WINDOW_SIZE[0] - 14 - ss.get_width(),
+            screen.blit(ss, (WIN_W - 14 - ss.get_width(),
                              fy - ss.get_height() // 2))
 
         # status toast chip: in 160ms / hold 4s / out 220ms
@@ -1363,7 +1683,50 @@ def run_ui(state, stop_flag, dev_line, err_line="", monitor=None, board=None,
                 chip.blit(cs, (18, (20 - cs.get_height()) // 2))
                 chip.set_alpha(int(255 * alpha))
                 rise = int(8 * (1.0 - min(1.0, t_ / 0.16)))
-                screen.blit(chip, (WINDOW_SIZE[0] - 14 - cw, fy - 10 + rise))
+                screen.blit(chip, (WIN_W - 14 - cw, fy - 10 + rise))
+
+        # --------------------------------------------- dropdown picker overlay
+        if drop is not None:
+            r = drop["rect"]
+            if drop["mouse"] != mouse_pos and r.collidepoint(mouse_pos):
+                mi = (mouse_pos[1] - r.y - drop["pad"]
+                      + int(drop["scroll"])) // drop["item_h"]
+                if 0 <= mi < len(drop["items"]):
+                    drop["sel"] = mi
+            drop["mouse"] = mouse_pos
+            screen.blit(grad(r.w, r.h, CLR["hoverTop"], CLR["raisedBot"], 8),
+                        r.topleft)
+            pygame.draw.rect(screen, mixc(CLR["stroke"], CLR["accent"], 0.35),
+                             r, width=1, border_radius=8)
+            screen.set_clip(r.inflate(-2, -4))
+            y0 = r.y + drop["pad"] - int(drop["scroll"])
+            for i, (nm, _cb) in enumerate(drop["items"]):
+                ir = pygame.Rect(r.x + 4, y0 + i * drop["item_h"],
+                                 r.w - 12, drop["item_h"] - 2)
+                if ir.bottom < r.y or ir.y > r.bottom:
+                    continue
+                if i == drop["sel"]:
+                    screen.blit(grad(ir.w, ir.h, ACCENT_TINT[0],
+                                     ACCENT_TINT[1], 6), ir.topleft)
+                    pygame.draw.rect(screen, CLR["accent"], ir,
+                                     width=1, border_radius=6)
+                if i == drop["cur"]:           # the currently active entry
+                    pygame.draw.circle(screen, CLR["accent"],
+                                       (ir.x + 11, ir.centery), 2)
+                ns = T(f_labelF if i == drop["sel"] else f_label, nm,
+                       CLR["text"] if i == drop["sel"] else CLR["text2"])
+                screen.blit(ns, (ir.x + 22, ir.centery - ns.get_height() // 2))
+            if drop["max_scroll"] > 0:
+                track = pygame.Rect(r.right - 6, r.y + 4, 3, r.h - 8)
+                pygame.draw.rect(screen, CLR["scrollTrack"], track,
+                                 border_radius=2)
+                th = max(18, int(track.h * r.h / (drop["max_scroll"] + r.h)))
+                ty = track.y + int((track.h - th)
+                                   * (drop["scroll"] / drop["max_scroll"]))
+                pygame.draw.rect(screen, CLR["scrollThumb"],
+                                 pygame.Rect(track.x, ty, 3, th),
+                                 border_radius=2)
+            screen.set_clip(None)
 
         pygame.display.flip()
         clock.tick(30)          # 30 fps is plenty for a menu and halves GIL load

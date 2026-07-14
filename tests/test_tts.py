@@ -103,7 +103,8 @@ with state.lock:
     state.tts_gain = 0.5
 bank.play(0)
 cb(silent, out, frames, None, None)
-check("TTS volume scales the mix", abs(np.abs(out).max() - 0.1) < 0.01)
+check("TTS volume scales the mix", abs(np.abs(out).max() - 0.1) < 0.01,
+      f"peak={np.abs(out).max():.3f}")
 with state.lock:
     state.tts_gain = 1.0
 while state.tts_voices:

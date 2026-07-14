@@ -37,7 +37,10 @@ Every audio file in ./sounds (wav/flac/ogg/mp3, first 64, alphabetical) gets
 a button in the grid on the right. Clicking a button always plays the sound
 locally so you hear it yourself; while the "To mic" toggle is on it is also
 mixed into the mic channel. Pause freezes all playing sounds (both paths),
-Stop clears them. Keys 1-9 trigger the first nine sounds.
+Stop clears them. Keys 1-9 trigger the first nine sounds. The Hear toggle in
+the same strip mirrors the processed mix to your speakers (self-listen);
+while the AI voice is live the RVC worker mirrors its converted voice to the
+speakers the same way, so you hear the AI voice too.
 
 TEXT TO SPEECH
 --------------
@@ -52,10 +55,15 @@ the AI voice while the RVC worker is live; off = clean TTS.
 EFFECTS & PRESETS
 -----------------
 Pitch, robot/vocoder mix, helmet doubler, grit, reverb, echo, radio band-pass
-and bass boost are individual menu rows. The Preset row applies curated
-combinations (Space Marine, Ghost, ...) which can be tweaked freely afterwards
-- the row shows "Custom" once any value diverges from the applied preset.
-"Test - hear myself" mirrors the processed mix to your speakers.
+and bass boost are individual menu rows. Numeric rows carry a draggable
+slider in the middle; clicking the number itself opens a small box to type
+an exact value (Enter commits, Esc cancels), and keyboard < > still steps.
+The Preset row applies curated combinations (Space Marine, Ghost, ...) which
+can be tweaked freely afterwards - the row shows "Custom" once any value
+diverges from the applied preset. Pressing the Preset or AI character row
+opens an alphabetical dropdown for direct picking. The window itself is
+resizable (drag edges, Aero snap); the soundboard pane absorbs the extra
+space.
 
 Defaults:  arrows/WASD or d-pad/left stick = navigate,  Enter/Space or A =
 select,  left/right adjusts values,  1-9 = play clip,  0/Backspace or Y =

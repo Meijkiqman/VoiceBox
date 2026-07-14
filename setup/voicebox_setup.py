@@ -232,6 +232,8 @@ def step_app(url, skip):
        f"$s.TargetPath='{INSTALL_DIR / 'VoiceBox.bat'}'; "
        f"$s.WorkingDirectory='{INSTALL_DIR}'; $s.Save()")
     say("    done - double-click 'VoiceBox' on the Desktop to start")
+    say(f"    AI voice (optional): extract the rvc package zip into")
+    say(f"    {INSTALL_DIR}  (so it becomes {INSTALL_DIR / 'rvc'})")
 
 
 def main():

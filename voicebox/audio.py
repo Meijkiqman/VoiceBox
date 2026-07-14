@@ -266,7 +266,7 @@ class AudioEngine:
 
 
 class Monitor:
-    """Self-listen ("Test - hear myself"). While the main stream is running it
+    """Self-listen (the HEAR strip toggle). While the main stream is running it
     mirrors the processed mix to the default speakers. If the main stream never
     opened (e.g. virtual cable not installed yet), toggling on runs the whole
     chain as a mic -> speakers stream instead, so the voice is still testable."""
