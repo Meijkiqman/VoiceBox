@@ -95,15 +95,20 @@ with state.lock:
 bank.play(0)
 cb(silent, out, frames, None, None)
 check("clean TTS mixes in post-chain", abs(np.abs(out).max() - 0.2) < 0.01)
+state.events.put("stop")                              # clear before next check
+cb(silent, out, frames, None, None)
 
 # TTS volume applies on the mic channel
 with state.lock:
     state.tts_gain = 0.5
 bank.play(0)
 cb(silent, out, frames, None, None)
-check("TTS volume scales the mix", abs(np.abs(out).max() - 0.1) < 0.01)
+check("TTS volume scales the mix", abs(np.abs(out).max() - 0.1) < 0.01,
+      f"peak={np.abs(out).max():.3f}")
 with state.lock:
     state.tts_gain = 1.0
+state.events.put("stop")
+cb(silent, out, frames, None, None)
 
 # pause freezes, stop clears (same contract as the soundboard)
 bank.play(0)

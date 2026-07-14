@@ -63,6 +63,7 @@ class FakeProc:
         FakeProc.last = self
         self.cmd = cmd
         self.stdout = FakeStdout()
+        self.stdin = io.StringIO()
         self.terminated = False
     def terminate(self):
         self.terminated = True
@@ -104,7 +105,20 @@ try:
     ai.cycle(1)                          # kratos (proc is None, no restart)
     ai.start()
     check("no-index voice omits --index", "--index" not in FakeProc.last.cmd)
+    check("self-listen off omits --monitor",
+          "--monitor" not in FakeProc.last.cmd)
     ai.stop()
+
+    # HEAR while AI live: worker gets --monitor at launch / MONITOR over stdin
+    class FakeMon:
+        on = True
+    ai_mon = voicebox.AiVoice(state, rvc_dir=root, monitor=FakeMon())
+    ai_mon.start()
+    check("self-listen on adds --monitor", "--monitor" in FakeProc.last.cmd)
+    ai_mon.set_monitor(False)
+    check("HEAR toggle reaches the live worker",
+          FakeProc.last.stdin.getvalue() == "MONITOR 0\n")
+    ai_mon.stop()
 finally:
     voicebox.subprocess.Popen = real_popen
 
@@ -139,5 +153,21 @@ check("AI rows ordered before Sounds to mic",
 menu_no_ai = voicebox.Menu(state, threading.Event())
 check("no AI rows without AiVoice",
       all(it.label not in ("AI voice", "AI character") for it in menu_no_ai.items))
+
+# HEAR toggle must forward the new state to the AI worker
+class RecAI:
+    available = False
+    def __init__(self): self.calls = []
+    def set_monitor(self, on): self.calls.append(on)
+
+class TogMon:
+    def __init__(self): self.on, self.error = False, ""
+    def toggle(self): self.on = not self.on
+
+rec = RecAI()
+menu_fwd = voicebox.Menu(state, threading.Event(), TogMon(), None, rec)
+menu_fwd._toggle_monitor()
+menu_fwd._toggle_monitor()
+check("HEAR toggle forwarded to the AI worker", rec.calls == [True, False])
 
 finish()

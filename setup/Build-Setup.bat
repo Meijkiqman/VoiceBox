@@ -17,9 +17,10 @@ if errorlevel 1 (
 echo Building VoiceBoxSetup.exe ...
 python -m PyInstaller --onefile --console --name VoiceBoxSetup ^
     --add-data "..\voicebox.py;app" ^
+    --add-data "..\rvc_worker.py;app" ^
     --add-data "..\controls.json;app" ^
-    --add-data "..\dlc.json;app" ^
     --add-data "..\VoiceBox.bat;app" ^
+    --add-data "..\assets;app\assets" ^
     voicebox_setup.py
 
 if errorlevel 1 (

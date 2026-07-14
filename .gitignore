@@ -15,5 +15,8 @@ sounds/*
 tts_phrases.json
 tts_cache/
 
+# AI voice - RVC runtime + voice models (~12 GB of binaries, stays local)
+rvc/
+
 # logs / local junk
 *.log

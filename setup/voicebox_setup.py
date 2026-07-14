@@ -33,7 +33,7 @@ PYTHON_URL = (f"https://www.python.org/ftp/python/{PYTHON_VERSION}/"
               f"python-{PYTHON_VERSION}-amd64.exe")
 CABLE_URL = "https://download.vb-audio.com/Download_CABLE/VBCABLE_Driver_Pack45.zip"
 PACKAGES = ["numpy", "scipy", "sounddevice", "soundfile", "pygame"]
-APP_FILES = ["voicebox.py", "controls.json", "dlc.json", "VoiceBox.bat"]
+APP_FILES = ["voicebox.py", "rvc_worker.py", "controls.json", "VoiceBox.bat"]
 INSTALL_DIR = Path(os.environ.get("LOCALAPPDATA", str(Path.home()))) / "VoiceBox"
 
 
@@ -217,6 +217,9 @@ def step_app(url, skip):
             copied += 1
     if not copied:
         raise RuntimeError(f"no app files found in {src}")
+    assets = src / "assets"
+    if assets.is_dir():
+        shutil.copytree(assets, INSTALL_DIR / "assets", dirs_exist_ok=True)
     say(f"    {copied} file(s) -> {INSTALL_DIR}")
     say("    creating Desktop shortcut...")
     ps("$s=(New-Object -ComObject WScript.Shell).CreateShortcut("
@@ -224,6 +227,8 @@ def step_app(url, skip):
        f"$s.TargetPath='{INSTALL_DIR / 'VoiceBox.bat'}'; "
        f"$s.WorkingDirectory='{INSTALL_DIR}'; $s.Save()")
     say("    done - double-click 'VoiceBox' on the Desktop to start")
+    say(f"    AI voice (optional): extract the rvc package zip into")
+    say(f"    {INSTALL_DIR}  (so it becomes {INSTALL_DIR / 'rvc'})")
 
 
 def main():

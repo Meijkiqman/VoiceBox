@@ -16,14 +16,19 @@ real mic --> [VoiceBox: pitch/effects/soundboard | or RVC AI voice] --> VB-CABLE
 - **Presets** - Space Marine, Ghost, Robot, Chipmunk, Monster, Ork,
   Walkie-Talkie; every ingredient is also a manual row (pitch, robot/vocoder
   mix, helmet doubler, grit, reverb, echo, radio band-pass, bass boost).
+  Pressing the Preset row (or the AI character row) opens an alphabetical
+  dropdown for direct picking; the < > arrows still cycle. Every numeric row
+  has a draggable slider, and clicking the number lets you type an exact
+  value.
 - **Soundboard** - drop audio files (wav/flac/ogg/mp3) into `sounds/`; each
   becomes a grid tile. Keys 1-9 fire the first nine. You always hear sounds
   locally; the "To mic" toggle decides whether Discord hears them too.
   Pause freezes everything mid-clip, Stop clears it.
-- **AI voice** - point `RVC_DIR` in `voicebox.py` at an RVC-beta package with
-  `weights/*.pth` models; VoiceBox runs `rvc_worker.py` on RVC's own bundled
-  CUDA Python and pipes the converted voice into the cable. Pick the
-  character from the menu; the soundboard keeps working on top.
+- **AI voice** - the `rvc/` folder holds a trimmed RVC-beta package with
+  `weights/*.pth` voice models; VoiceBox runs `rvc_worker.py` on RVC's own
+  bundled CUDA Python and pipes the converted voice into the cable. Pick the
+  character from the menu; the soundboard keeps working on top. (To use a
+  package elsewhere, change `RVC_DIR` in `voicebox.py`.)
 - **Text to speech** - type a phrase in the panel under the soundboard and
   press Enter to save it; saved phrases live in a scrollable list (click to
   speak into the mic, `x` to delete) and persist in `tts_phrases.json`.
@@ -31,9 +36,12 @@ real mic --> [VoiceBox: pitch/effects/soundboard | or RVC AI voice] --> VB-CABLE
   chain as your voice - and through the AI voice while the worker is live;
   toggle it off for clean TTS. Speech is rendered once with the Windows
   voice (SAPI) and cached in `tts_cache/`.
-- **Test - hear myself** self-listen, live mic meter with peak-hold,
-  keyboard + mouse + game controller navigation, remappable controls
-  (`controls.json`), crash-proof against malformed config.
+- **Hear myself** self-listen toggle in the soundboard strip (next to
+  Pause/Stop) - mirrors the processed mix to your speakers, including the
+  converted AI voice while the RVC worker is live. Live mic meter with
+  peak-hold, keyboard + mouse + game controller navigation, remappable
+  controls (`controls.json`), crash-proof against malformed config.
+  Resizable window (drag edges, maximize, Windows snap); 960x660 minimum.
 
 ## Quick start
 
@@ -57,6 +65,13 @@ prompt), and installs VoiceBox with a Desktop shortcut. App files travel
 inside the exe; `--url <zip>` downloads them instead. `--check` reports
 without changing anything.
 
+The AI voice package is **not** in the installer (it is ~12 GB of runtime +
+voice models). It ships separately as a zip of the `rvc/` folder; extract it
+into the install folder (`%LOCALAPPDATA%\VoiceBox`) so `rvc\runtime\python.exe`
+exists, and the AI rows appear in the menu on next launch. Without it,
+VoiceBox simply runs without the AI voice. Real-time AI conversion needs an
+NVIDIA GPU.
+
 ## Tests
 
 `python tests/run_all.py` - six suites, 100+ checks, headless (no audio
@@ -69,6 +84,8 @@ keyboard/mouse UI runs.
 ```
 voicebox.py       the app: audio engine, effects, soundboard, UI (pygame)
 rvc_worker.py     headless RVC realtime worker (runs on RVC's runtime python)
+rvc/              AI voice package: RVC runtime, weights/*.pth voices,
+                  logs/*.index, hubert_base.pt, rmvpe.pt (not committed)
 VoiceBox.bat      run-from-source launcher (auto-installs deps)
 controls.json     input bindings (delete to restore defaults)
 sounds/           your soundboard clips (not committed)

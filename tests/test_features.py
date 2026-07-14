@@ -99,12 +99,12 @@ check("settings rows in order",
       labels == ["Preset", "Pitch", "Robot voice", "Helmet doubler",
                  "Grit / growl", "Reverb", "Echo", "Radio voice", "Bass boost",
                  "Voice volume", "Clip volume", "TTS voice FX", "TTS volume",
-                 "Test - hear myself", "Sounds to mic", "Pause sounds",
+                 "Sounds to mic", "Pause sounds",
                  "Stop all sounds", "Quit"],
       str(labels))
-menu_nomon = voicebox.Menu(state, stop_flag)
-check("Menu without monitor omits Test row",
-      all(it.label != "Test - hear myself" for it in menu_nomon.items))
+menu_nomon = voicebox.Menu(state, stop_flag)   # hear-myself lives in the strip
+check("menu rows identical without monitor",
+      [it.label for it in menu_nomon.items] == labels)
 
 # ------------------------------------------------------- UI smoke incl. mouse
 import pygame
@@ -116,16 +116,42 @@ def poke():
     for _ in range(6):
         pygame.event.post(pygame.event.Event(pygame.KEYDOWN, key=pygame.K_DOWN))
         time.sleep(0.01)
+    # resizable window: grow + restore must relayout without crashing
+    pygame.event.post(pygame.event.Event(pygame.VIDEORESIZE, w=1160, h=780,
+                                         size=(1160, 780)))
+    time.sleep(0.05)
+    pygame.event.post(pygame.event.Event(pygame.VIDEORESIZE, w=960, h=660,
+                                         size=(960, 660)))
     # row 0 (Preset) sits at y 82-116 in the skinned layout (header + section)
     pygame.event.post(pygame.event.Event(pygame.MOUSEMOTION, pos=(300, 95)))    # hover row 0
     pygame.event.post(pygame.event.Event(pygame.MOUSEWHEEL, x=0, y=-1))         # wheel down
     pygame.event.post(pygame.event.Event(pygame.MOUSEWHEEL, x=0, y=1))          # wheel up
     pygame.event.post(pygame.event.Event(pygame.MOUSEMOTION, pos=(300, 95)))
     time.sleep(0.05)
+    # click the Preset row -> alphabetical dropdown opens under it (y 120+)
     pygame.event.post(pygame.event.Event(pygame.MOUSEBUTTONDOWN, button=1, pos=(300, 95)))
+    time.sleep(0.05)
+    # first item = "Chipmunk" (alphabetical); picking it applies the preset
+    pygame.event.post(pygame.event.Event(pygame.MOUSEBUTTONDOWN, button=1, pos=(150, 138)))
     pygame.event.post(pygame.event.Event(pygame.MOUSEBUTTONDOWN, button=1, pos=(300, 2)))  # above list: ignored
+    time.sleep(0.1)
+    snaps.append(state.preset_label())               # before slider tweaks
+    # Reverb slider (row 5, y 292-326): track spans x 168-288; drag to the end
+    pygame.event.post(pygame.event.Event(pygame.MOUSEBUTTONDOWN, button=1, pos=(228, 309)))
+    time.sleep(0.05)
+    pygame.event.post(pygame.event.Event(pygame.MOUSEMOTION, pos=(348, 309)))
+    pygame.event.post(pygame.event.Event(pygame.MOUSEBUTTONUP, button=1, pos=(348, 309)))
+    time.sleep(0.05)
+    # Echo (row 6, y 328-362): click the number, type an exact value
+    pygame.event.post(pygame.event.Event(pygame.MOUSEBUTTONDOWN, button=1, pos=(335, 345)))
+    time.sleep(0.05)
+    pygame.event.post(pygame.event.Event(pygame.TEXTINPUT, text="42"))
+    time.sleep(0.05)
+    pygame.event.post(pygame.event.Event(pygame.KEYDOWN, key=pygame.K_RETURN))
     time.sleep(0.05)
     pygame.event.post(pygame.event.Event(pygame.QUIT))
+
+snaps = []
 
 threading.Thread(target=poke, daemon=True).start()
 ui_error = []
@@ -141,6 +167,53 @@ while not state.events.empty():
     ev = state.events.get_nowait()
     if isinstance(ev, tuple) and ev[0] == "pitch":
         pitch_events += 1
-check("mouse click activated the Preset row", pitch_events >= 1)
+check("preset dropdown pick queued a pitch event", pitch_events >= 1)
+check("preset dropdown pick applied Chipmunk",
+      snaps and snaps[0] == "Chipmunk", str(snaps))
+check("slider drag set reverb to the far end", state.reverb == 1.0,
+      str(state.reverb))
+check("typed value set echo to 42%", abs(state.echo - 0.42) < 1e-9,
+      str(state.echo))
+
+# ------------------------------------------- HEAR strip toggle (self-listen)
+class FakeMonitor:
+    def __init__(self):
+        self.on, self.error = False, ""
+    def toggle(self):
+        self.on = not self.on
+
+fmon = FakeMonitor()
+stop_flag = threading.Event()
+
+def hear_button_center():
+    """Replicate run_ui's strip layout math to locate the HEAR button."""
+    f = pygame.font.Font(
+        str(voicebox.BASE_DIR / "assets" / "fonts" / "JetBrainsMono-Bold.ttf"),
+        11)
+    x = 384                                                 # G_X
+    for lab, active in [
+            ("TO MIC: ON" if state.clips_to_mic else "TO MIC: OFF",
+             state.clips_to_mic),
+            ("PAUSED" if state.clips_paused else "PAUSE", state.clips_paused),
+            ("STOP", False)]:
+        x += f.size(lab)[0] + 24 + (12 if active else 0) + 8
+    return x + 10, 62 + 15                                  # STRIP_Y + H/2
+
+def poke_hear():
+    time.sleep(0.7)
+    pygame.event.post(pygame.event.Event(pygame.MOUSEBUTTONDOWN, button=1,
+                                         pos=hear_button_center()))
+    time.sleep(0.1)
+    pygame.event.post(pygame.event.Event(pygame.QUIT))
+
+threading.Thread(target=poke_hear, daemon=True).start()
+ui_error = []
+try:
+    voicebox.run_ui(state, stop_flag, "dev", "", fmon)
+except Exception as e:
+    ui_error.append(e)
+check("UI with HEAR strip button survives", not ui_error,
+      repr(ui_error[0]) if ui_error else "")
+check("HEAR strip click toggled self-listen", fmon.on is True)
 
 finish()

@@ -13,6 +13,9 @@ Status protocol on stdout (read by VoiceBox):  "STATUS loading",
 "STATUS running ...", "STATUS error <msg>".  VoiceBox may write
 "PLAY <wav path>" lines on stdin; those files are mixed into the mic input,
 so the model speaks them in the AI voice (the TTS-through-AI path).
+"MONITOR 1" / "MONITOR 0" on stdin (or --monitor at launch) mirrors the
+converted voice to the default speakers - the self-listen ("hear myself")
+path while the AI owns the voice.
 --selftest converts a few synthetic blocks and reports timing instead of
 opening audio devices.
 """
@@ -34,6 +37,9 @@ def parse_args():
                     choices=["pm", "harvest", "crepe", "rmvpe"])
     ap.add_argument("--input-device", default="", help="substring, empty = default mic")
     ap.add_argument("--output-device", default="CABLE Input")
+    ap.add_argument("--monitor", action="store_true",
+                    help="also mirror the converted voice to the default "
+                         "speakers (self-listen)")
     ap.add_argument("--selftest", action="store_true")
     return ap.parse_args()
 
@@ -113,10 +119,51 @@ if __name__ == "__main__":
     tts_q = _queue.Queue()
     tts_buf = [np.zeros(0, dtype=np.float32)]
 
+    # ---- self-listen --------------------------------------------------------
+    # While the AI owns the voice, VoiceBox's own "hear myself" mirror carries
+    # no voice (our converted audio goes straight to the cable), so we mirror
+    # it to the default speakers ourselves when asked - at launch (--monitor)
+    # or live via "MONITOR 1/0" on stdin.
+    mon_q = _queue.Queue(maxsize=8)
+    mon = {"stream": None}
+
+    def set_monitor(on):
+        if on and mon["stream"] is None:
+            def mon_cb(outdata, frames, t, status):
+                try:
+                    outdata[:] = np.tile(mon_q.get_nowait(), (2, 1)).T
+                except _queue.Empty:
+                    outdata[:] = 0
+            try:
+                s = sd.OutputStream(channels=2, samplerate=sr,
+                                    blocksize=block_frame, dtype="float32",
+                                    callback=mon_cb)
+                s.start()
+                mon["stream"] = s
+            except Exception as e:
+                print(f"STATUS error monitor {e}", flush=True)
+                return
+        elif not on and mon["stream"] is not None:
+            s, mon["stream"] = mon["stream"], None
+            try:
+                s.stop()
+                s.close()
+            except Exception:
+                pass
+            while not mon_q.empty():           # drop stale blocks
+                try:
+                    mon_q.get_nowait()
+                except _queue.Empty:
+                    break
+        print(f"STATUS monitor {'on' if on else 'off'}", flush=True)
+
     def _stdin_listener():
         try:
             for line in sys.stdin:
                 line = line.strip()
+                if line.startswith("MONITOR"):
+                    set_monitor(line.split()[-1] in ("1", "on"))
+                    continue
                 if not line.startswith("PLAY "):
                     continue
                 try:
@@ -201,12 +248,19 @@ if __name__ == "__main__":
         try:
             out = process(indata)
             outdata[:] = np.tile(out, (2, 1)).T
+            if mon["stream"] is not None:    # mirror to the self-listen stream
+                try:
+                    mon_q.put_nowait(out.copy())
+                except _queue.Full:
+                    pass
         except Exception as e:
             print(f"STATUS error {e}", flush=True)
             outdata[:] = 0
 
     if sys.stdin is not None:                # VoiceBox feeds TTS over stdin
         threading.Thread(target=_stdin_listener, daemon=True).start()
+    if args.monitor:
+        set_monitor(True)
 
     print(f"STATUS running sr={sr} block={block_frame} device={device}", flush=True)
     try:
