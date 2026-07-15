@@ -90,5 +90,15 @@ cb(loud, out, frames, None, None)
 check("full record queue drops instead of blocking", time.time() - t0 < 0.1)
 state.record_q = None
 
+# ------------------------------------------------------------- menu REC label
+menu = voicebox.Menu(state, threading.Event(), recorder=rec)
+row = next(it for it in menu.items if it.label == "Record output")
+check("REC row reads off while idle", row.value_fn() == "off")
+rec.toggle()
+rec.started_at = time.time() - 61      # 1:01 in; one time sample, no 0:00 blip
+check("REC row formats minutes:seconds", row.value_fn() == "REC 1:01",
+      row.value_fn())
+rec.toggle()
+
 voicebox.audio.sf = real_sf
 finish()

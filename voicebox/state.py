@@ -205,6 +205,33 @@ class State:
         save_user_presets(self.user_presets, self.user_presets_path)
         return name
 
+    def delete_user_preset(self, i):
+        """Remove user preset i (index into user_presets) and persist. The
+        dialed effect values are never touched; deleting the selected preset
+        just re-anchors the row (it then reads Custom, which is honest)."""
+        with self.lock:
+            if not (0 <= i < len(self.user_presets)):
+                return False
+            del self.user_presets[i]
+            n = len(PRESETS)
+            if self.preset_idx > n + i:
+                self.preset_idx -= 1   # a later entry: its index shifted down
+            elif self.preset_idx == n + i:
+                self.preset_idx = 0
+        save_user_presets(self.user_presets, self.user_presets_path)
+        return True
+
+    def rename_user_preset(self, i, name):
+        """Rename user preset i and persist. Returns the stored name
+        ('' = rejected: blank after cleanup, or i out of range)."""
+        name = " ".join(str(name).split())[:40]
+        with self.lock:
+            if not name or not (0 <= i < len(self.user_presets)):
+                return ""
+            self.user_presets[i] = (name, self.user_presets[i][1])
+        save_user_presets(self.user_presets, self.user_presets_path)
+        return name
+
     def snapshot(self):
         """Persisted values -> plain dict (see PERSIST_FIELDS)."""
         with self.lock:

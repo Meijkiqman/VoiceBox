@@ -211,5 +211,22 @@ check("defaults include the global section",
       isinstance(cfg.get("global"), dict) and "clips" in cfg["global"]
       and "ai_voice" in cfg["global"] and "next_scene" in cfg["global"])
 
+# a hand-edited bare value where a list belongs must not lose the binding
+import json
+import tempfile
+from pathlib import Path
+
+real_path = voicebox.controls.CONTROLS_PATH
+tmp_controls = Path(tempfile.mkdtemp()) / "controls.json"
+tmp_controls.write_text(json.dumps(
+    {"keyboard": {"select": "return"}, "gamepad": {"select": 0}}),
+    encoding="utf-8")
+voicebox.controls.CONTROLS_PATH = tmp_controls
+cfg2 = voicebox.load_controls()
+voicebox.controls.CONTROLS_PATH = real_path
+check("bare string binding is wrapped, not dropped",
+      cfg2["keyboard"]["select"] == ["return"]
+      and cfg2["gamepad"]["select"] == [0])
+
 del sys.modules["keyboard"]
 finish()

@@ -183,6 +183,30 @@ check("out-of-range delete ignored", sc6.names() == ["a", "b"])
 sc6.apply(9)
 check("out-of-range apply ignored", sc6.applied == "c")
 
+# deleting an earlier scene must not shift which scene cycle() sits on
+state7, sc7, _ = fresh(None, None)
+sc7.save("a"); sc7.save("b"); sc7.save("c")
+sc7.apply(2)                                 # sitting on "c"
+sc7.delete(0)
+check("delete before the selection keeps its anchor",
+      sc7.sel == 1 and sc7.names()[sc7.sel] == "c")
+
+# ------------------------------------------------------------------- rename
+state8, sc8, path8 = fresh(None, None)
+sc8.save("a"); sc8.save("b")
+sc8.apply(1)                                 # "b" is applied + selected
+check("rename cleans and stores the name",
+      sc8.rename(1, "  Ghost   mode ") == "Ghost mode"
+      and sc8.names() == ["a", "Ghost mode"])
+check("renaming the applied scene follows on the row",
+      sc8.applied == "Ghost mode")
+check("rename persists on disk",
+      voicebox.Scenes(state8, None, None, path=path8).names()
+      == ["a", "Ghost mode"])
+check("blank rename rejected",
+      sc8.rename(0, "   ") == "" and sc8.names()[0] == "a")
+check("out-of-range rename rejected", sc8.rename(9, "x") == "")
+
 empty_state, empty_sc, _ = fresh(None, None)
 empty_sc.cycle(+1)                           # no scenes: must not divide by zero
 check("cycle with no scenes is a no-op", empty_sc.applied is None)
@@ -226,5 +250,55 @@ next(it for it in menu.items if it.label == "Save scene").select()
 check("Save scene row snapshots", msc.names() == ["Scene 1"])
 check("save reports the name", "Scene 1" in mstate.status_msg)
 check("scene row names the applied scene", srow.value_fn() == "Scene 1")
+
+# ------------------------------------------- dropdown rename/delete (UI flow)
+import time
+
+import pygame
+
+ui_state = voicebox.State()
+ui_sc = voicebox.Scenes(ui_state, None, None,
+                        path=Path(tempfile.mkdtemp()) / "ui.json")
+ui_sc.save("alpha"); ui_sc.save("beta")
+ui_sc.apply(0)
+stop_flag = threading.Event()
+snaps = []
+
+
+def key(k):
+    pygame.event.post(pygame.event.Event(pygame.KEYDOWN, key=k))
+    pygame.event.post(pygame.event.Event(pygame.KEYUP, key=k))
+    time.sleep(0.1)
+
+
+def poke():
+    time.sleep(0.7)
+    key(pygame.K_RETURN)                     # Scene row -> dropdown opens
+    key(pygame.K_F2)                         # rename the focused entry
+    pygame.event.post(pygame.event.Event(pygame.TEXTINPUT, text="zulu"))
+    time.sleep(0.1)
+    key(pygame.K_RETURN)                     # commit the new name
+    snaps.append(list(ui_sc.names()))
+    key(pygame.K_ESCAPE)                     # close the picker
+    key(pygame.K_RETURN)                     # reopen: still on the renamed one
+    key(pygame.K_DELETE)                     # delete it
+    snaps.append(list(ui_sc.names()))
+    key(pygame.K_ESCAPE)
+    pygame.event.post(pygame.event.Event(pygame.QUIT))
+
+
+threading.Thread(target=poke, daemon=True).start()
+ui_error = []
+try:
+    voicebox.run_ui(ui_state, stop_flag, "dev", "", None, None, None, None,
+                    None, None, None, ui_sc)
+except Exception as e:
+    ui_error.append(e)
+check("UI dropdown rename/delete survives", not ui_error,
+      repr(ui_error[0]) if ui_error else "")
+check("F2 + typing renamed the scene in place",
+      snaps and snaps[0] == ["zulu", "beta"], str(snaps))
+check("Del removed the renamed scene",
+      len(snaps) == 2 and snaps[1] == ["beta"], str(snaps))
 
 finish()

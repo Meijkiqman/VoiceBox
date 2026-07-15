@@ -186,9 +186,7 @@ class Menu:
         if recorder is not None:
             self.items.append(MenuItem(
                 "Record output",
-                lambda: (f"REC {int(time.time() - recorder.started_at) // 60}:"
-                         f"{int(time.time() - recorder.started_at) % 60:02d}"
-                         if recorder.on else "off"),
+                self._rec_label,
                 select=recorder.toggle,
                 adjust=lambda d: recorder.toggle()))
         if hotkeys is not None:
@@ -243,12 +241,14 @@ class Menu:
 
     def _save_preset(self):
         name = self.state.save_user_preset()
-        self.state.status_msg = f"saved \"{name}\" (edit user_presets.json to rename)"
+        self.state.status_msg = \
+            f"saved \"{name}\" - right-click it in the Preset list to rename"
         self.state.status_at = time.time()
 
     def _save_scene(self):
         name = self.scenes.save()
-        self.state.status_msg = f"saved \"{name}\" (edit scenes.json to rename)"
+        self.state.status_msg = \
+            f"saved \"{name}\" - right-click it in the Scene list to rename"
         self.state.status_at = time.time()
 
     def _toggle_gate(self):
@@ -294,6 +294,12 @@ class Menu:
             self.state.cues_on = not self.state.cues_on
         if self.state.cues is not None and self.state.cues_on:
             self.state.cues.mute(self.state.mic_muted)   # sample the sound
+
+    def _rec_label(self):
+        if not self.recorder.on:
+            return "off"
+        secs = int(time.time() - self.recorder.started_at)   # sample time once:
+        return f"REC {secs // 60}:{secs % 60:02d}"           # no 0:00 at 1:00
 
     def _tts_voice_label(self):
         v = self.state.tts_voice
@@ -925,25 +931,33 @@ def run_ui(state, stop_flag, dev_line, err_line="", monitor=None, board=None,
 
     # ------------------------------ dropdown picker (Scene / Preset / AI voice)
     # Pressing one of these rows opens an alphabetical list anchored to the
-    # row; while open it owns keyboard, mouse and controller.
+    # row; while open it owns keyboard, mouse and controller. Scenes and user
+    # presets are editable in place: right-click (or F2) renames, the x on
+    # the focused row (or Del) deletes. Built-ins and AI characters are not.
     DROP_ROWS = ("Scene", "Preset", "AI character")
     drop = None                   # dict(items, rect, sel, cur, scroll, ...) | None
 
     def open_dropdown(row_idx):
         nonlocal drop
         label = menu.items[row_idx].label
+        n_builtin = 0
         if label == "Preset":
             presets = state.presets_all()      # built-ins + user presets
+            n_builtin = len(presets) - len(state.user_presets)
             entries = sorted(((nm, i) for i, (nm, _p) in enumerate(presets)),
                              key=lambda e: e[0].lower())
             items = [(nm, lambda i=i: state.apply_preset(i))
                      for nm, i in entries]
+            meta = [{"orig": i, "mut": i >= n_builtin} for _nm, i in entries]
+            kind = "preset"
             cur = next((k for k, (_nm, i) in enumerate(entries)
                         if i == state.preset_idx), 0)
         elif label == "AI character" and ai is not None:
             entries = sorted(((p.stem, i) for i, p in enumerate(ai.voices)),
                              key=lambda e: e[0].lower())
             items = [(nm, lambda i=i: ai.select(i)) for nm, i in entries]
+            meta = [{"orig": i, "mut": False} for _nm, i in entries]
+            kind = "ai"
             cur = next((k for k, (_nm, i) in enumerate(entries)
                         if i == ai.sel), 0)
         elif label == "Scene" and scenes is not None:
@@ -954,13 +968,16 @@ def run_ui(state, stop_flag, dev_line, err_line="", monitor=None, board=None,
             entries = sorted(((nm, i) for i, nm in enumerate(scenes.names())),
                              key=lambda e: e[0].lower())
             items = [(nm, lambda i=i: scenes.apply(i)) for nm, i in entries]
+            meta = [{"orig": i, "mut": True} for _nm, i in entries]
+            kind = "scene"
             cur = next((k for k, (_nm, i) in enumerate(entries)
                         if i == scenes.sel), 0)
         else:
             return
         item_h, pad = 28, 4
+        hint_h = 16 if any(m["mut"] for m in meta) else 0
         ry = VIEW_TOP - int(list_scroll) + row_pos[row_idx]
-        want = len(items) * item_h + pad * 2
+        want = len(items) * item_h + pad * 2 + hint_h
         below = VIEW_BOT - 6 - (ry + ROW_HGT + 4)
         above = ry - 4 - (VIEW_TOP + 6)
         if below >= min(want, 200) or below >= above:
@@ -968,12 +985,16 @@ def run_ui(state, stop_flag, dev_line, err_line="", monitor=None, board=None,
         else:
             h, y = min(want, above), ry - 4 - min(want, above)
         rect = pygame.Rect(L_X + 10, y, L_W - 20, h)
-        max_scroll = max(0, want - h)
+        rows_h = h - hint_h                    # hint strip is pinned, not scrolled
+        max_scroll = max(0, want - hint_h - rows_h)
         scroll = min(max_scroll,
-                     max(0, cur * item_h + pad - (h - item_h) // 2))
-        drop = {"items": items, "rect": rect, "item_h": item_h, "pad": pad,
+                     max(0, cur * item_h + pad - (rows_h - item_h) // 2))
+        drop = {"items": items, "meta": meta, "kind": kind,
+                "n_builtin": n_builtin, "hint_h": hint_h,
+                "rect": rect, "item_h": item_h, "pad": pad,
                 "sel": cur, "cur": cur, "scroll": scroll,
-                "max_scroll": max_scroll, "row": row_idx, "mouse": None}
+                "max_scroll": max_scroll, "row": row_idx, "mouse": None,
+                "edit": None, "del_hit": {}}
 
     def drop_pick():
         nonlocal drop
@@ -982,45 +1003,141 @@ def run_ui(state, stop_flag, dev_line, err_line="", monitor=None, board=None,
             menu.flash[drop["row"]] = time.time() + 0.25
         drop = None
 
-    def drop_nav(d):
-        drop["sel"] = (drop["sel"] + d) % len(drop["items"])
-        view_h = drop["rect"].h - drop["pad"] * 2
-        top = drop["sel"] * drop["item_h"]
+    def drop_scroll_to(k):
+        view_h = drop["rect"].h - drop["hint_h"] - drop["pad"] * 2
+        top = k * drop["item_h"]
         if top < drop["scroll"]:
             drop["scroll"] = top
         elif top + drop["item_h"] > drop["scroll"] + view_h:
             drop["scroll"] = top + drop["item_h"] - view_h
 
+    def drop_nav(d):
+        drop["sel"] = (drop["sel"] + d) % len(drop["items"])
+        drop_scroll_to(drop["sel"])
+
+    def drop_close():
+        nonlocal drop
+        if drop is not None and drop["edit"] is not None and not tts_focus:
+            try:
+                pygame.key.stop_text_input()
+            except Exception:
+                pass
+        drop = None
+
+    def drop_refresh(sel=None, focus_orig=None):
+        """Rebuild the open picker in place (after a rename or delete)."""
+        nonlocal drop
+        if drop is None:
+            return
+        row_idx, scroll = drop["row"], drop["scroll"]
+        drop = None
+        open_dropdown(row_idx)
+        if drop is None:                       # e.g. the last scene was deleted
+            return
+        if focus_orig is not None:
+            sel = next((k for k, m in enumerate(drop["meta"])
+                        if m["orig"] == focus_orig), sel)
+        if sel is not None and drop["items"]:
+            drop["sel"] = min(sel, len(drop["items"]) - 1)
+        drop["scroll"] = max(0, min(drop["max_scroll"], scroll))
+        drop_scroll_to(drop["sel"])
+
+    def drop_delete(k):
+        if drop is None or not (0 <= k < len(drop["meta"])):
+            return
+        m = drop["meta"][k]
+        if not m["mut"]:
+            return
+        if drop["kind"] == "scene":
+            scenes.delete(m["orig"])
+        else:                                  # a user preset
+            state.delete_user_preset(m["orig"] - drop["n_builtin"])
+        drop_refresh(sel=k)
+
+    def drop_rename_start(k):
+        if drop is None or not (0 <= k < len(drop["meta"])):
+            return
+        if not drop["meta"][k]["mut"]:
+            return
+        drop["sel"] = k
+        drop_scroll_to(k)
+        drop["edit"] = {"i": k, "text": ""}    # empty box; old name = placeholder
+        try:
+            pygame.key.start_text_input()
+        except Exception:
+            pass
+
+    def drop_rename_end(commit):
+        ed, drop["edit"] = drop["edit"], None
+        if not tts_focus:
+            try:
+                pygame.key.stop_text_input()
+            except Exception:
+                pass
+        if not commit or ed is None or not ed["text"].strip():
+            return                             # empty box = keep the old name
+        m = drop["meta"][ed["i"]]
+        if drop["kind"] == "scene":
+            scenes.rename(m["orig"], ed["text"])
+        else:
+            state.rename_user_preset(m["orig"] - drop["n_builtin"], ed["text"])
+        drop_refresh(focus_orig=m["orig"])     # follow it to its sorted spot
+
     def drop_event(event):
         """All input routes here while the picker is open."""
         nonlocal drop
+        if drop["edit"] is not None:           # inline rename owns the input
+            if event.type == pygame.TEXTINPUT:
+                drop["edit"]["text"] = (drop["edit"]["text"] + event.text)[:40]
+            elif event.type == pygame.KEYDOWN:
+                held_keys.add(event.key)
+                if event.key == pygame.K_BACKSPACE:
+                    drop["edit"]["text"] = drop["edit"]["text"][:-1]
+                elif event.key in (pygame.K_RETURN, pygame.K_KP_ENTER):
+                    drop_rename_end(True)
+                elif event.key == pygame.K_ESCAPE:
+                    drop_rename_end(False)
+            elif event.type == pygame.MOUSEBUTTONDOWN:
+                drop_rename_end(True)          # clicking elsewhere confirms
+            return
         if event.type == pygame.KEYDOWN:
             held_keys.add(event.key)
             act = key_action(event.key)
             if   act == "up":     drop_nav(-1)
             elif act == "down":   drop_nav(+1)
             elif act == "select": drop_pick()
+            elif event.key == pygame.K_DELETE: drop_delete(drop["sel"])
+            elif event.key == pygame.K_F2:     drop_rename_start(drop["sel"])
             elif act == "back" or event.key == pygame.K_ESCAPE:
-                drop = None
+                drop_close()
         elif event.type == pygame.MOUSEWHEEL:
             drop["scroll"] = max(0, min(drop["max_scroll"],
                                         drop["scroll"]
                                         - event.y * drop["item_h"]))
-        elif event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
+        elif event.type == pygame.MOUSEBUTTONDOWN and event.button in (1, 3):
             r = drop["rect"]
-            if r.collidepoint(event.pos):
-                i = (event.pos[1] - r.y - drop["pad"]
-                     + int(drop["scroll"])) // drop["item_h"]
-                if 0 <= i < len(drop["items"]):
+            if not r.collidepoint(event.pos):
+                drop_close()                   # click elsewhere just closes
+                return
+            if event.button == 1:
+                di = next((k for k, rr in drop["del_hit"].items()
+                           if rr.collidepoint(event.pos)), None)
+                if di is not None:
+                    drop_delete(di)
+                    return
+            i = (event.pos[1] - r.y - drop["pad"]
+                 + int(drop["scroll"])) // drop["item_h"]
+            if 0 <= i < len(drop["items"]):
+                if event.button == 3:          # right-click: rename in place
+                    drop_rename_start(i)
+                else:
                     drop["sel"] = i
                     drop_pick()
-            else:
-                drop = None                # click elsewhere just closes
         elif event.type == pygame.MOUSEBUTTONDOWN:
-            drop = None
+            drop_close()
         elif event.type == pygame.JOYBUTTONDOWN:
             if   event.button in pad_select: drop_pick()
-            elif event.button in pad_back:   drop = None
+            elif event.button in pad_back:   drop_close()
         elif event.type == pygame.JOYHATMOTION and event.value != (0, 0):
             if   event.value[1] ==  1: drop_nav(-1)
             elif event.value[1] == -1: drop_nav(+1)
@@ -1066,10 +1183,10 @@ def run_ui(state, stop_flag, dev_line, err_line="", monitor=None, board=None,
                     state.status_at = time.time()
 
             elif drop is not None and event.type in (
-                    pygame.KEYDOWN, pygame.KEYUP, pygame.MOUSEBUTTONDOWN,
-                    pygame.MOUSEWHEEL, pygame.MOUSEMOTION,
-                    pygame.JOYBUTTONDOWN, pygame.JOYHATMOTION,
-                    pygame.JOYAXISMOTION):
+                    pygame.KEYDOWN, pygame.KEYUP, pygame.TEXTINPUT,
+                    pygame.MOUSEBUTTONDOWN, pygame.MOUSEWHEEL,
+                    pygame.MOUSEMOTION, pygame.JOYBUTTONDOWN,
+                    pygame.JOYHATMOTION, pygame.JOYAXISMOTION):
                 if event.type == pygame.KEYUP:
                     held_keys.discard(event.key)
                 else:
@@ -1808,7 +1925,8 @@ def run_ui(state, stop_flag, dev_line, err_line="", monitor=None, board=None,
         # --------------------------------------------- dropdown picker overlay
         if drop is not None:
             r = drop["rect"]
-            if drop["mouse"] != mouse_pos and r.collidepoint(mouse_pos):
+            if (drop["edit"] is None and drop["mouse"] != mouse_pos
+                    and r.collidepoint(mouse_pos)):
                 mi = (mouse_pos[1] - r.y - drop["pad"]
                       + int(drop["scroll"])) // drop["item_h"]
                 if 0 <= mi < len(drop["items"]):
@@ -1818,12 +1936,36 @@ def run_ui(state, stop_flag, dev_line, err_line="", monitor=None, board=None,
                         r.topleft)
             pygame.draw.rect(screen, mixc(CLR["stroke"], CLR["accent"], 0.35),
                              r, width=1, border_radius=8)
-            screen.set_clip(r.inflate(-2, -4))
+            drop["del_hit"] = {}
+            rows_clip = pygame.Rect(r.x + 1, r.y + 2, r.w - 2,
+                                    r.h - 4 - drop["hint_h"])
+            screen.set_clip(rows_clip)
             y0 = r.y + drop["pad"] - int(drop["scroll"])
             for i, (nm, _cb) in enumerate(drop["items"]):
                 ir = pygame.Rect(r.x + 4, y0 + i * drop["item_h"],
                                  r.w - 12, drop["item_h"] - 2)
-                if ir.bottom < r.y or ir.y > r.bottom:
+                if ir.bottom < r.y or ir.y > rows_clip.bottom:
+                    continue
+                ed = drop["edit"]
+                if ed is not None and ed["i"] == i:
+                    # inline rename: empty box, the old name as placeholder
+                    box = pygame.Rect(ir.x + 2, ir.centery - 11, ir.w - 4, 22)
+                    screen.blit(grad(box.w, box.h, CLR["headerBot"],
+                                     CLR["paneLeft"], 5), box.topleft)
+                    pygame.draw.rect(screen, CLR["accent"], box, width=1,
+                                     border_radius=5)
+                    txt = ed["text"]
+                    ts = (T(f_labelF, txt, CLR["text"]) if txt
+                          else T(f_label, nm, CLR["faint"]))
+                    screen.set_clip(rows_clip.clip(box.inflate(-10, 0)))
+                    screen.blit(ts, (box.x + 8,
+                                     box.centery - ts.get_height() // 2))
+                    screen.set_clip(rows_clip)
+                    if txt and (now * 2.0) % 2 < 1:
+                        cx = min(box.x + 8 + ts.get_width() + 2, box.right - 6)
+                        pygame.draw.line(screen, CLR["accent"],
+                                         (cx, box.centery - 7),
+                                         (cx, box.centery + 7))
                     continue
                 if i == drop["sel"]:
                     screen.blit(grad(ir.w, ir.h, ACCENT_TINT[0],
@@ -1835,12 +1977,40 @@ def run_ui(state, stop_flag, dev_line, err_line="", monitor=None, board=None,
                                        (ir.x + 11, ir.centery), 2)
                 ns = T(f_labelF if i == drop["sel"] else f_label, nm,
                        CLR["text"] if i == drop["sel"] else CLR["text2"])
-                screen.blit(ns, (ir.x + 22, ir.centery - ns.get_height() // 2))
+                if drop["meta"][i]["mut"] and i == drop["sel"]:
+                    # focused editable row: keep the name clear of the x box
+                    screen.set_clip(rows_clip.clip(
+                        pygame.Rect(ir.x, ir.y, ir.w - 32, ir.h)))
+                    screen.blit(ns, (ir.x + 22,
+                                     ir.centery - ns.get_height() // 2))
+                    screen.set_clip(rows_clip)
+                    dr = pygame.Rect(ir.right - 24, ir.centery - 9, 18, 18)
+                    dh = q8(hover_step(("dropdel", i),
+                                       dr.collidepoint(mouse_pos), dt))
+                    pygame.draw.rect(screen,
+                                     mixc(CLR["strokeHover"], CLR["danger"], dh),
+                                     dr, width=1, border_radius=5)
+                    xs = T(f_badge, "x",
+                           CLR["danger"] if dh > 0.4 else CLR["muted"])
+                    screen.blit(xs, (dr.centerx - xs.get_width() // 2,
+                                     dr.centery - xs.get_height() // 2))
+                    drop["del_hit"][i] = dr
+                else:
+                    screen.blit(ns, (ir.x + 22,
+                                     ir.centery - ns.get_height() // 2))
+            screen.set_clip(r.inflate(-2, -4))
+            if drop["hint_h"]:                 # pinned strip under the rows
+                hint = T(f_small, "right-click renames · x deletes",
+                         CLR["faint"])
+                screen.blit(hint, (r.x + 12, r.bottom - drop["hint_h"]
+                                   + (drop["hint_h"] - hint.get_height()) // 2
+                                   - 2))
             if drop["max_scroll"] > 0:
-                track = pygame.Rect(r.right - 6, r.y + 4, 3, r.h - 8)
+                rh = r.h - drop["hint_h"]
+                track = pygame.Rect(r.right - 6, r.y + 4, 3, rh - 8)
                 pygame.draw.rect(screen, CLR["scrollTrack"], track,
                                  border_radius=2)
-                th = max(18, int(track.h * r.h / (drop["max_scroll"] + r.h)))
+                th = max(18, int(track.h * rh / (drop["max_scroll"] + rh)))
                 ty = track.y + int((track.h - th)
                                    * (drop["scroll"] / drop["max_scroll"]))
                 pygame.draw.rect(screen, CLR["scrollThumb"],

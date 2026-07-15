@@ -109,6 +109,28 @@ check("second save numbers up", name2 == "My preset 2")
 check("preset cycle includes user presets",
       len(ps.presets_all()) == len(voicebox.PRESETS) + 2)
 
+# ------------------------------------------------- rename / delete (dropdown)
+check("rename cleans and persists",
+      ps.rename_user_preset(0, "  Big   Growl ") == "Big Growl"
+      and voicebox.load_user_presets(ppath)[0][0] == "Big Growl")
+check("renamed preset keeps its params",
+      ps.user_presets[0][1]["drive"] == 0.6)
+check("blank rename rejected",
+      ps.rename_user_preset(0, "  ") == ""
+      and ps.user_presets[0][0] == "Big Growl")
+check("out-of-range rename rejected", ps.rename_user_preset(9, "x") == "")
+
+ps.preset_idx = len(voicebox.PRESETS) + 1     # sitting on "My preset 2"
+check("deleting an earlier preset keeps the selection anchored",
+      ps.delete_user_preset(0) is True
+      and ps.preset_idx == len(voicebox.PRESETS)
+      and ps.preset_label() == "My preset 2")
+check("delete persists", len(voicebox.load_user_presets(ppath)) == 1)
+check("deleting the selected preset re-anchors the row",
+      ps.delete_user_preset(0) is True and ps.preset_idx == 0
+      and ps.user_presets == [])
+check("out-of-range delete rejected", ps.delete_user_preset(0) is False)
+
 # malformed user preset entries are dropped / applied defensively
 ppath.write_text(json.dumps([
     {"name": "ok", "params": {"drive": 0.1}},

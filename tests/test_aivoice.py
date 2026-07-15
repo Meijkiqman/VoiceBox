@@ -187,6 +187,16 @@ try:
     with state.lock:
         state.ai_pitches.clear()
         state.ai_pitch = 0.0
+
+    # ---- output device arg: never the literal string "None" --------------
+    real_out_match = voicebox.aivoice.OUTPUT_DEVICE_MATCH
+    voicebox.aivoice.OUTPUT_DEVICE_MATCH = None    # config dialed to defaults
+    ai_out = voicebox.AiVoice(state, rvc_dir=root)
+    ai_out.start()
+    od = FakeProc.last.cmd[FakeProc.last.cmd.index("--output-device") + 1]
+    check("no output match -> empty arg, not 'None'", od == "", repr(od))
+    ai_out.stop()
+    voicebox.aivoice.OUTPUT_DEVICE_MATCH = real_out_match
 finally:
     voicebox.subprocess.Popen = real_popen
 

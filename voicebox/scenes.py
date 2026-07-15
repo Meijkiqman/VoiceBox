@@ -104,8 +104,23 @@ class Scenes:
         if not (0 <= i < len(self.scenes)):
             return
         self.scenes.pop(i)
+        if self.sel > i:
+            self.sel -= 1              # keep cycle() anchored on the same scene
         self.sel = min(self.sel, max(0, len(self.scenes) - 1))
         save_scenes(self.scenes, self.path)
+
+    def rename(self, i, name):
+        """Rename scene i and persist. Returns the stored name ('' = rejected:
+        blank after cleanup, or i out of range)."""
+        name = " ".join(str(name).split())[:40]
+        if not name or not (0 <= i < len(self.scenes)):
+            return ""
+        old, params = self.scenes[i]
+        self.scenes[i] = (name, params)
+        if self.applied == old and self.sel == i:
+            self.applied = name        # the menu row keeps naming this persona
+        save_scenes(self.scenes, self.path)
+        return name
 
     def _apply_fx(self, p):
         """Effect dialing, clamped. Pitch goes through set_pitch so the

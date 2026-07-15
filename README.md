@@ -16,9 +16,11 @@ real mic --> [VoiceBox: pitch/effects/soundboard | or RVC AI voice] --> VB-CABLE
 - **Scenes** - one press for a whole persona: a scene snapshots the effect
   dialing *plus* which AI character is loaded (and whether the AI voice runs
   at all), its pitch and FX routing, and the TTS voice/rate. "Save scene"
-  stores the current setup (`scenes.json` - edit it to rename); the Scene
-  row or Ctrl+Alt+S switches, starting or stopping the RVC worker to match.
-  So "DnD ghost" and "game night" are one keypress apart, mid-game.
+  stores the current setup in `scenes.json`; the Scene row or Ctrl+Alt+S
+  switches, starting or stopping the RVC worker to match. In the Scene
+  dropdown, right-click (or F2) renames a scene in place and the x (or Del)
+  deletes it. So "DnD ghost" and "game night" are one keypress apart,
+  mid-game.
 - **Presets** - Space Marine, Ghost, Robot, Chipmunk, Monster, Ork,
   Walkie-Talkie; every ingredient is also a manual row (pitch, robot/vocoder
   mix, helmet doubler, grit, reverb, echo, radio band-pass, bass boost).
@@ -26,7 +28,8 @@ real mic --> [VoiceBox: pitch/effects/soundboard | or RVC AI voice] --> VB-CABLE
   dropdown for direct picking; the < > arrows still cycle. Every numeric row
   has a draggable slider, and clicking the number lets you type an exact
   value. "Save preset" snapshots your current dialing as a user preset
-  (`user_presets.json` - edit it to rename) that joins the cycle.
+  (`user_presets.json`) that joins the cycle - rename or delete your own
+  presets right in the dropdown, like scenes.
 - **Settings persist** - every slider, toggle and the chosen preset are
   saved to `settings.json` (autosaved while running) and restored on the
   next launch.

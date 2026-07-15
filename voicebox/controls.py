@@ -11,7 +11,13 @@ def load_controls():
         user = json.loads(CONTROLS_PATH.read_text(encoding="utf-8"))
         for section in ("keyboard", "gamepad", "global"):
             if isinstance(user.get(section), dict):
-                cfg[section].update(user[section])
+                for key, v in user[section].items():
+                    # a bare "return" where a list belongs is a common
+                    # hand-edit; wrap it instead of dropping the binding
+                    if (isinstance(DEFAULT_CONTROLS[section].get(key), list)
+                            and not isinstance(v, list)):
+                        v = [v]
+                    cfg[section][key] = v
     except (OSError, json.JSONDecodeError, TypeError):
         pass
     return cfg

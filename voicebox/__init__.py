@@ -60,7 +60,9 @@ A scene is the whole persona in one row: the effect dialing, the AI
 character (and whether the worker runs), its pitch and FX routing, and the
 TTS voice/rate. "Save scene" snapshots the current setup into scenes.json;
 the Scene row (or Ctrl+Alt+S) applies one, starting or stopping the RVC
-worker to match.
+worker to match. In the Scene and Preset dropdowns, right-click (or F2)
+renames an entry in place and the x on the focused row (or Del) deletes it
+- scenes and your saved presets only; the built-ins stay.
 
 EFFECTS & PRESETS
 -----------------

@@ -191,6 +191,11 @@ if __name__ == "__main__":
             return
         import socket as _socket
         try:
+            while not fx_q.empty():          # drop blocks from a dead bridge:
+                try:                         # they are seconds-old audio
+                    fx_q.get_nowait()
+                except _queue.Empty:
+                    break
             s = _socket.create_connection(("127.0.0.1", args.fx_port), timeout=3)
             s.setsockopt(_socket.IPPROTO_TCP, _socket.TCP_NODELAY, 1)
             s.sendall(int(sr).to_bytes(4, "little"))     # handshake: our rate
@@ -208,6 +213,8 @@ if __name__ == "__main__":
                     continue
                 if line.startswith("FX"):
                     fx["on"] = line.split()[-1] in ("1", "on")
+                    if fx["on"] and fx["sock"] is None:
+                        _fx_connect()        # bridge died earlier: reconnect
                     print(f"STATUS fx {'on' if fx['on'] else 'off'}", flush=True)
                     continue
                 if line.startswith("PITCH"):

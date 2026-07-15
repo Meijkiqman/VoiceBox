@@ -279,8 +279,11 @@ class AiVoice:
         out_match = self.state.output_device or OUTPUT_DEVICE_MATCH
         in_match = self.state.input_device or INPUT_DEVICE_MATCH
         cmd = [str(self.rvc_dir / "runtime" / "python.exe"),
-               str(BASE_DIR / "rvc_worker.py"),
-               "--pth", str(pth), "--output-device", str(out_match)]
+               str(BASE_DIR / "rvc_worker.py"), "--pth", str(pth),
+               # "" = the worker's system default; str(None) would make it
+               # search for a device literally named "None"
+               "--output-device",
+               "" if out_match is None else str(out_match)]
         if int(self.state.ai_pitch):
             cmd += ["--pitch", str(int(self.state.ai_pitch))]
         index = self._index_for(pth)
