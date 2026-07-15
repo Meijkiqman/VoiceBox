@@ -46,8 +46,12 @@ def make_callback(state):
                 state.shifter.set_semitones(ev[1])
             elif isinstance(ev, tuple) and ev[0] == "tts":
                 state.tts_voices.append([ev[1], 0, bool(ev[2])])
-            elif isinstance(ev, int) and 0 <= ev < len(state.clips):
-                state.voices.append([state.clips[ev], 0])
+            elif isinstance(ev, int):
+                # bind the list once: a rescan on the UI thread may swap
+                # state.clips between a len() check and the index
+                clips = state.clips
+                if 0 <= ev < len(clips):
+                    state.voices.append([clips[ev], 0])
 
         # TTS phrases: fx-tagged ones ride the mic signal itself, so the whole
         # chain (pitch, robot, reverb, ...) treats them like speech; the rest
@@ -171,6 +175,8 @@ class AudioEngine:
     def __init__(self, state):
         self.state = state
         self.stream = None
+        self.monitor = None            # wired by app.main: the HEAR fallback
+                                       # must hand over when a stream opens
         self.error = ""
         self.dev_line = ""
         self.in_name = "default mic"   # resolved names for the UI
@@ -197,6 +203,15 @@ class AudioEngine:
     def open(self):
         """(Re)open the stream on the currently selected devices."""
         self.close()
+        # If self-listen is running its full-chain fallback (the main stream
+        # was down), close it first: two make_callback streams would fight
+        # over the event queue and the shifter state. It comes back below -
+        # as a mirror of the new stream on success, as the fallback on failure.
+        m = self.monitor
+        was_fallback = (m is not None and m.on
+                        and getattr(m, "fallback", False))
+        if was_fallback:
+            m.toggle()
         try:
             in_dev = self._resolve("input")
             out_dev = self._resolve("output")
@@ -206,6 +221,16 @@ class AudioEngine:
                              if out_dev is not None else "default out")
             self.dev_line = (f"{self.in_name}  ->  {self.out_name}"
                              "   (Discord input: CABLE Output)")
+            # Nothing has been draining state.events while no stream was
+            # running, so a session of soundboard clicks would fire all at
+            # once on the new stream. Clear the backlog, keep the pitch
+            # (same pattern as the self-listen fallback start).
+            while not self.state.events.empty():
+                try:
+                    self.state.events.get_nowait()
+                except queue.Empty:
+                    break
+            self.state.events.put(("pitch", self.state.semitones))
             # latency="high" buys buffering headroom: Python-side hiccups (GC,
             # UI thread holding the GIL) then cause no dropouts. Adds ~20 ms -
             # fine for voice chat, and far better than cutting out.
@@ -223,12 +248,16 @@ class AudioEngine:
             except Exception:
                 self.latency_ms = None
             self.error = ""
+            if was_fallback:
+                m.toggle()             # HEAR stays on, now mirroring the stream
             return True
         except (SystemExit, Exception) as e:
             self.stream = None
             self.dev_line = ""
             self.latency_ms = None
             self.error = f"audio unavailable: {e}"
+            if was_fallback:
+                m.toggle()             # main still down: restore the fallback
             return False
 
     def close(self):
@@ -286,6 +315,8 @@ class Monitor:
         self.state = state
         self.has_main = has_main_stream        # bool, or callable for live state
         self.stream = None
+        self.fallback = False          # True while the stream is the full-chain
+                                       # mic->speakers stand-in (main was down)
         self.error = ""
 
     def _main_up(self):
@@ -303,6 +334,7 @@ class Monitor:
             except Exception:
                 pass
             self.stream = None
+            self.fallback = False
             if not self._main_up():            # fallback stream fed the meter
                 self.state.in_level = 0.0
             return
@@ -328,6 +360,7 @@ class Monitor:
                     channels=CHANNELS, callback=cb)
                 self.stream.start()
                 self.state.monitor_q = q
+                self.fallback = False
             else:
                 # Nothing has been draining state.events while the main stream
                 # was down, so a session of soundboard clicks is queued up and
@@ -343,10 +376,12 @@ class Monitor:
                     channels=CHANNELS, latency="high",
                     callback=make_callback(self.state))
                 self.stream.start()
+                self.fallback = True
             self.error = ""
         except Exception as e:
             self.stream = None
             self.state.monitor_q = None
+            self.fallback = False
             self.error = str(e)
 
     def close(self):
@@ -407,8 +442,10 @@ class LocalPlayer:
                 self.voices.clear()
             elif isinstance(ev, tuple) and ev[0] == "raw":
                 self.voices.append([ev[1], 0])
-            elif isinstance(ev, int) and 0 <= ev < len(state.clips):
-                self.voices.append([state.clips[ev], 0])
+            elif isinstance(ev, int):
+                clips = state.clips        # bind once: rescan may swap it
+                if 0 <= ev < len(clips):
+                    self.voices.append([clips[ev], 0])
         y = np.zeros(frames, dtype=np.float32)
         if self.voices and not paused:
             still = []

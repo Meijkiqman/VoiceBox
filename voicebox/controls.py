@@ -126,6 +126,8 @@ class GlobalHotkeys:
                 kb.unhook(h)
             except Exception:
                 pass
+        if hooks:                      # PTT armed mute-by-default; with the
+            self._set_mute(False)      # hooks gone nothing could unmute it
 
     def toggle(self):
         self.disable() if self.on else self.enable()

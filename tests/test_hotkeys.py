@@ -121,9 +121,12 @@ fake.release("f8")
 check("PTT release re-mutes", state.mic_muted is True)
 fake.fire("ctrl+alt+m")
 check("mute hotkey toggles", state.mic_muted is False)
+fake.press("f8"); fake.release("f8")   # leave the mic PTT-muted
 hk.disable()
 check("disable removes PTT hooks too",
       not fake.press_hooks and not fake.release_hooks)
+check("disable un-mutes: no PTT key is left to go live",
+      state.mic_muted is False)
 
 # ------------------------------------------------- blank / disabled bindings
 fake, state, board, hk = with_fake(

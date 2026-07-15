@@ -47,6 +47,9 @@ class FakeSD:
         self.streams.append(s)
         return s
 
+    def OutputStream(self, **kw):
+        return self.Stream(**kw)
+
 
 real_sd = voicebox.audio.sd
 voicebox.audio.sd = FakeSD()
@@ -137,6 +140,53 @@ row = next(it for it in menu.items if it.label == "Input device")
 row.adjust(+1)
 check("device row adjust switches the device",
       mstate.input_device == "Default Mic")
+
+
+# --------------------------------------- HEAR fallback handoff on (re)open
+class PickyFakeSD(FakeSD):
+    """A duplex open with an explicit device fails (the cable is missing);
+    the default-device fallback and mirror streams still open fine."""
+    def Stream(self, **kw):
+        if "device" in kw:
+            raise RuntimeError("cable unplugged")
+        return super().Stream(**kw)
+
+
+voicebox.audio.sd = PickyFakeSD()
+hstate = voicebox.State()
+heng = voicebox.AudioEngine(hstate)
+heng.open()                            # fails: the cable device is gone
+hmon = voicebox.Monitor(hstate,
+                        has_main_stream=lambda: heng.stream is not None)
+heng.monitor = hmon
+hmon.toggle()                          # HEAR on -> full-chain fallback
+check("HEAR runs the fallback while the main stream is down",
+      hmon.on and hmon.fallback and hstate.monitor_q is None)
+fb1 = hmon.stream
+heng.open()                            # still failing: fallback must survive
+check("failed reopen restores the fallback",
+      heng.stream is None and hmon.on and hmon.fallback
+      and hmon.stream is not fb1 and hmon.stream.started)
+fb2 = hmon.stream
+voicebox.audio.sd = FakeSD()           # the cable comes back
+heng.open()
+check("reopen closes the fallback (no twin callbacks)", fb2.closed)
+check("HEAR survives the handoff as a mirror of the new stream",
+      hmon.on and not hmon.fallback and hstate.monitor_q is not None
+      and heng.stream is not None and heng.stream.started)
+
+# --------------------------------------- backlog drained when a stream opens
+voicebox.audio.sd = FakeSD()
+bstate = voicebox.State()
+bstate.set_pitch(3)                    # a queued pitch, like restore() does
+bstate.events.put(0); bstate.events.put(1); bstate.events.put(2)
+beng = voicebox.AudioEngine(bstate)
+beng.open()
+backlog = []
+while not bstate.events.empty():
+    backlog.append(bstate.events.get_nowait())
+check("open drains stale clip events, keeps the pitch",
+      backlog == [("pitch", 3)])
 
 voicebox.audio.sd = real_sd
 finish()

@@ -216,6 +216,8 @@ class TTSBank:
         self.pending = None           # phrase to auto-play once synthesis lands
         self.voice_names = None       # installed voices; None until listed
         self._voices_kicked = False
+        self._gen = 0                 # bumped by invalidate(): synth jobs still
+                                      # in flight then drop their (stale) result
 
     def _load(self):
         try:
@@ -261,22 +263,31 @@ class TTSBank:
     def invalidate(self):
         """Voice/rate changed: rendered speech is stale. Phrases stay; the
         next play re-synthesizes (disk cache makes switching back instant)."""
+        self._gen += 1                 # in-flight jobs hold old-voice audio
         self.samples.clear()
         self.wav_path.clear()
         self.status.clear()
         self.pending = None
 
     def _synth_job(self, text):
+        gen = self._gen
         try:
             with self.state.lock:
                 voice = getattr(self.state, "tts_voice", None)
                 rate = getattr(self.state, "tts_rate", 0)
             samples, wav = tts_synthesize(text, voice, rate)
         except Exception as e:
+            if gen != self._gen:       # settings moved on mid-render: a fresh
+                return                 # job owns this phrase now, stay out
             self.status[text] = "error"
             if self.pending == text:
                 self.pending = None
             self._report(f"TTS: {str(e)[:70]}")
+            return
+        if gen != self._gen:
+            # the voice/rate changed while rendering: this audio is the OLD
+            # voice - marking it ready would speak the wrong voice until the
+            # next invalidate. Drop it; the next play re-synthesizes.
             return
         self.samples[text] = samples
         self.wav_path[text] = wav
@@ -333,11 +344,20 @@ class TTSBank:
         self._route(text)
 
     def _route(self, text):
-        samples = self.samples[text]
+        samples = self.samples.get(text)
+        if samples is None:
+            # invalidate() (menu row, or a scene on the hotkey thread) beat us
+            # between the ready-check and here: re-render, auto-play on landing
+            self.status.pop(text, None)
+            self.pending = text
+            self.ensure(text)
+            return
         fx = self.state.tts_fx
         through_ai = False
-        if fx and self.ai is not None and self.ai.proc is not None:
-            through_ai = self.ai.inject(self.wav_path[text])
+        wav = self.wav_path.get(text)
+        if (fx and wav is not None and self.ai is not None
+                and self.ai.proc is not None):
+            through_ai = self.ai.inject(wav)
         if not through_ai:
             self.state.events.put(("tts", samples, fx))
         # local listen, like the soundboard - skipped when self-listen already

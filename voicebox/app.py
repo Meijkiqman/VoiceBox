@@ -29,6 +29,7 @@ def main():
 
     monitor = Monitor(state,
                       has_main_stream=lambda: engine.stream is not None)
+    engine.monitor = monitor      # device switches hand the fallback over
     player = LocalPlayer(state)
     state.cues = Cues(state, player)
     board = Board(state, player, monitor)

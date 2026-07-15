@@ -108,4 +108,35 @@ while not state.events.empty():
         n_clip_events += 1
 check("held-key repeat starts only one clip", n_clip_events == 1, f"got {n_clip_events}")
 
+# ------------------------------------- 4. rescan racing a queued clip event
+# A rescan swaps state.clips on the UI thread while the audio callback
+# validates a queued index and then indexes the list. Simulate the worst
+# interleaving with a list that swaps itself out when its length is read:
+# both reads must hit the same list, or the IndexError kills the stream.
+class SwappingList(list):
+    def __init__(self, items, state, replacement):
+        super().__init__(items)
+        self._state, self._replacement = state, replacement
+
+    def __len__(self):
+        self._state.clips = self._replacement      # the rescan lands here
+        return super().__len__()
+
+
+rstate = voicebox.State()
+rstate.clips = SwappingList(rstate.clips, rstate, [])
+rcb = voicebox.make_callback(rstate)
+rstate.events.put(8)                       # valid for the old list only
+rcb(indata, outdata, frames, None, None)   # IndexError = dead audio stream
+check("clip event survives a rescan mid-bounds-check",
+      len(rstate.voices) == 1)
+
+lstate = voicebox.State()
+player = voicebox.LocalPlayer(lstate)
+lstate.clips = SwappingList(lstate.clips, lstate, [])
+player.events.put(8)
+player._callback(np.zeros((frames, 1), np.float32), frames, None, None)
+check("local player clip event survives the same race",
+      len(player.voices) == 1)
+
 finish()

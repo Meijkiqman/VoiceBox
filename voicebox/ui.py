@@ -1791,7 +1791,9 @@ def run_ui(state, stop_flag, dev_line, err_line="", monitor=None, board=None,
             if alpha > 0:
                 col = (CLR["danger"] if "error" in state.status_msg.lower()
                        else CLR["warning"])
-                cs = T(f_foot, f"{state.status_msg} (x{state.status_count})", col)
+                # just the message: status_count is the underrun tally (shown
+                # as "N drops" in the footer), unrelated to most statuses
+                cs = T(f_foot, state.status_msg, col)
                 cw = cs.get_width() + 30
                 chip = pygame.Surface((cw, 20), pygame.SRCALPHA)
                 pygame.draw.rect(chip, (*col, 26), chip.get_rect(), border_radius=6)

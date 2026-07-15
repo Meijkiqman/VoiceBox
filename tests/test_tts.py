@@ -335,6 +335,43 @@ vrow.adjust(+1)
 check("voice row wraps back to default", vstate.tts_voice is None)
 check("voice label shows default", vrow.value_fn() == "default")
 
+# a synth job still in flight when the voice/rate changes must drop its
+# result: it rendered the OLD voice, and marking it ready would keep
+# speaking that voice until the next invalidate
+gate = threading.Event()
+
+
+def gated_synthesize(text, voice=None, rate=0):
+    gate.wait(2.0)
+    return TONE.copy(), FAKE_WAV
+
+
+voicebox.tts.tts_synthesize = gated_synthesize
+sbank = voicebox.TTSBank(vstate, path=Path(tempfile.mkdtemp()) / "s.json")
+sbank.add("stale check")                      # job blocks on the gate
+with vstate.lock:
+    vstate.tts_voice = "Another Voice"        # user switches mid-render
+sbank.invalidate()
+gate.set()                                    # old-voice render lands now
+t0 = time.time()
+while time.time() - t0 < 0.5 and sbank.status.get("stale check") is None:
+    time.sleep(0.01)
+check("in-flight synth result dropped after invalidate",
+      "stale check" not in sbank.samples
+      and sbank.status.get("stale check") is None)
+voicebox.tts.tts_synthesize = fake_synthesize
+
+# invalidate() racing play() between the ready-check and routing must not
+# crash the UI thread - it re-renders and auto-plays instead
+gbank = voicebox.TTSBank(vstate, path=Path(tempfile.mkdtemp()) / "g.json")
+gbank.add("guard me")
+wait_status(gbank, "guard me")
+del gbank.samples["guard me"]                 # as if invalidate() interleaved
+gbank.play(0)                                 # status still says "ready"
+check("play survives an invalidate mid-route (re-renders)",
+      wait_status(gbank, "guard me") == "ready"
+      and "guard me" in gbank.samples)
+
 vbank.samples["x"] = TONE
 rrow = next(it for it in menu2.items if it.label == "TTS rate")
 with vstate.lock:
