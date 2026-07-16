@@ -1,9 +1,8 @@
 # VoiceBox
 
-Real-time voice changer + soundboard for Discord (or anything that takes a
-microphone). One window: DSP voice effects and presets on the left, a hotkey
-soundboard grid on the right, and optional AI voice conversion (RVC models
-like Arthur Morgan) running on the GPU in the background.
+Real-time voice changer + soundboard for Discord (or anything with a mic
+input). Effects and presets on the left, hotkey soundboard on the right,
+optional AI voice conversion (RVC) on the GPU in the background.
 
 ```
 real mic --> [VoiceBox: pitch/effects/soundboard | or RVC AI voice] --> VB-CABLE
@@ -11,159 +10,49 @@ real mic --> [VoiceBox: pitch/effects/soundboard | or RVC AI voice] --> VB-CABLE
                                                      Discord input = "CABLE Output"
 ```
 
-## Features
-
-- **Scenes** - one press for a whole persona: a scene snapshots the effect
-  dialing *plus* which AI character is loaded (and whether the AI voice runs
-  at all), its pitch and FX routing, and the TTS voice/rate. "Save scene"
-  stores the current setup in `scenes.json`; the Scene row or Ctrl+Alt+S
-  switches, starting or stopping the RVC worker to match. In the Scene
-  dropdown, right-click (or F2) renames a scene in place and the x (or Del)
-  deletes it. So "DnD ghost" and "game night" are one keypress apart,
-  mid-game.
-- **Presets** - Space Marine, Ghost, Robot, Chipmunk, Monster, Ork,
-  Walkie-Talkie; every ingredient is also a manual row (pitch, robot/vocoder
-  mix, helmet doubler, grit, reverb, echo, radio band-pass, bass boost).
-  Pressing the Preset row (or the AI character row) opens an alphabetical
-  dropdown for direct picking; the < > arrows still cycle. Every numeric row
-  has a draggable slider, and clicking the number lets you type an exact
-  value. "Save preset" snapshots your current dialing as a user preset
-  (`user_presets.json`) that joins the cycle - rename or delete your own
-  presets right in the dropdown, like scenes.
-- **Settings persist** - every slider, toggle and the chosen preset are
-  saved to `settings.json` (autosaved while running) and restored on the
-  next launch.
-- **Soundboard** - drop audio files (wav/flac/ogg/mp3) into `sounds/`, or
-  just drag them onto the window; each becomes a grid tile ("Rescan
-  sounds" also picks up new files without a restart). Clips are
-  loudness-normalized on load, so internet-sourced sounds stop being
-  randomly deafening or inaudible. Keys 1-9 fire the current hotkey page;
-  Tab / `]` / `[` or the PAGE chip flip pages, so every clip is reachable
-  from the keyboard. You always hear sounds locally; the "To mic" toggle
-  decides whether Discord hears them too. Pause freezes everything
-  mid-clip, Stop clears it.
-- **AI voice** - the `rvc/` folder holds a trimmed RVC-beta package with
-  `weights/*.pth` voice models; VoiceBox runs `rvc_worker.py` on RVC's own
-  bundled CUDA Python and pipes the converted voice into the cable. Pick the
-  character from the menu; "AI pitch" transposes your voice going into the
-  model (live, no restart - e.g. +12 to reach female characters) and is
-  remembered per character, so each voice keeps its own tuning across
-  switches and restarts. The soundboard keeps working on top. The "AI voice FX" row routes the
-  converted voice through VoiceBox's own effect chain (pitch, echo,
-  reverb, ...) - and therefore through HEAR self-listen - instead of
-  feeding the cable dry. (To use a package
-  elsewhere, set `"rvc_dir"` in `settings.json` or change `RVC_DIR` in
-  `voicebox/config.py`.)
-- **Text to speech** - type a phrase in the panel under the soundboard
-  (Ctrl+V pastes your clipboard) and press Enter to save it, or
-  Shift+Enter to speak it once without saving; saved phrases live in a
-  scrollable list (click to speak into the mic, `x` to delete) and
-  persist in `tts_phrases.json`.
-  With "TTS voice FX" on, the speech goes through the same pitch/effect
-  chain as your voice - and through the AI voice while the worker is live;
-  toggle it off for clean TTS. The "TTS voice" and "TTS rate" rows pick
-  any installed OS voice and speaking speed (persisted) - on Windows this
-  spans both the classic SAPI5 voices and the modern OneCore / "natural"
-  voices (add more under Settings -> Time & Language -> Speech). Speech is
-  rendered once per voice/rate with the OS engine and cached in
-  `tts_cache/`.
-- **Global hotkeys** - the soundboard works while a game or Discord has
-  focus: Ctrl+Alt+1-9 fire clips, Ctrl+Alt+0 stops everything, Ctrl+Alt+P
-  cycles presets, Ctrl+Alt+S steps through scenes, Ctrl+Alt+M toggles
-  mute, Ctrl+Alt+A toggles the AI voice. Remappable in `controls.json`
-  (`"global"` section); toggleable from the SYSTEM menu.
-- **Mic mute + push-to-talk** - mute from the menu, the `M` key, or the
-  global hotkey; the header shows MUTED while the soundboard and TTS keep
-  working. Bind a `"ptt"` key in `controls.json` for hold-to-talk (the mic
-  stays muted except while the key is held).
-- **Noise gate** - replaces the Discord suppression you had to turn off:
-  gates room hiss ahead of the effect chain (grit/reverb amplify it
-  otherwise), with hold + slow release so word tails survive. Threshold
-  adjustable from the menu.
-- **Record output** - one menu toggle writes the processed mix (voice +
-  effects + soundboard + TTS) to `recordings/*.wav`, handy for testing
-  presets or keeping funny moments.
-- **Sound cues** - short self-heard blips (speakers only, never the cable)
-  when the AI voice finishes loading or dies mid-game, and on mute/unmute -
-  so you never talk into a dead mic while alt-tabbed. Toggleable from the
-  SYSTEM menu; push-to-talk stays silent.
-- **Hear myself** self-listen toggle in the soundboard strip (next to
-  Pause/Stop) - mirrors the processed mix to your speakers, including the
-  converted AI voice while the RVC worker is live. Live mic meter with
-  peak-hold, a footer latency/underrun readout (for tuning `BLOCKSIZE`),
-  keyboard + mouse + game controller navigation, remappable controls
-  (`controls.json`), crash-proof against malformed config.
-  Resizable window (drag edges, maximize, Windows snap); 960x660 minimum.
-
-## Quick start
+## Install
 
 1. Install [VB-CABLE](https://vb-audio.com/Cable/) (run as admin, reboot).
-2. `pip install -r requirements.txt` (or just double-click `VoiceBox.bat`,
-   which installs anything missing and launches).
-3. Put some sounds in `sounds/`, run `python voicebox.py`.
-4. Discord -> Settings -> Voice & Video -> Input Device = **CABLE Output**.
-   Also disable Noise Suppression and automatic input sensitivity there,
-   or Discord's gate will chop the processed voice.
+2. Double-click `VoiceBox.bat` - it installs what's missing and launches.
+3. Discord -> Voice & Video -> Input Device = **CABLE Output** (disable
+   Noise Suppression and automatic sensitivity there too).
 
-Devices are picked from the DEVICES menu rows (persisted in
-`settings.json`); by default VoiceBox uses the system mic and auto-finds
-the cable. `python voicebox.py --list` prints audio devices if the
-auto-match fails. An RVC package folder can be set with a `"rvc_dir"`
-string in `settings.json` (no source edit needed).
+Or by hand: `pip install -r requirements.txt`, then `python voicebox.py`.
+
+## Features
+
+- **Scenes** - the whole persona (effects, AI character, TTS voice) in one
+  press or Ctrl+Alt+S; rename/delete right in the dropdown.
+- **Presets + effects** - Space Marine, Ghost, Robot, ...; pitch, robot,
+  doubler, grit, reverb, echo, radio and bass are manual rows with sliders.
+  "Save preset" adds your own. Everything persists across restarts.
+- **Soundboard** - drop audio files into `sounds/` (or onto the window);
+  keys 1-9 fire the current page, clips are loudness-normalized on load.
+- **AI voice** - RVC models (`rvc/weights/*.pth`) convert your voice live
+  on an NVIDIA GPU; per-character pitch memory, optional routing through
+  the effect chain.
+- **Text to speech** - typed phrases speak into the mic, through the
+  effects or the AI voice, with any installed OS voice.
+- **Global hotkeys** - clips, stop, presets, scenes, mute and AI voice
+  work while a game has focus (Ctrl+Alt+..., remappable in
+  `controls.json`).
+- **The rest** - mic mute + push-to-talk, noise gate, output recording to
+  `recordings/`, audible state cues, HEAR self-listen, mic meter, gamepad
+  navigation, resizable window.
+
+## AI voice package
+
+The RVC runtime + voice models (~12 GB) ship separately as a zip of the
+`rvc/` folder; extract it next to `voicebox.py` so `rvc\runtime\python.exe`
+exists and the AI rows appear on next launch. Without it, VoiceBox simply
+runs without the AI voice.
 
 ## Installer
 
-`setup/Build-Setup.bat` builds `setup/dist/VoiceBoxSetup.exe` (PyInstaller):
-a one-click bootstrapper that checks the system, silently installs Python and
-the libraries if missing, downloads + silently installs VB-CABLE (one UAC
-prompt), and installs VoiceBox with a Desktop shortcut. App files travel
-inside the exe; `--url <zip>` downloads them instead. `--check` reports
-without changing anything.
-
-The AI voice package is **not** in the installer (it is ~12 GB of runtime +
-voice models). It ships separately as a zip of the `rvc/` folder; extract it
-into the install folder (`%LOCALAPPDATA%\VoiceBox`) so `rvc\runtime\python.exe`
-exists, and the AI rows appear in the menu on next launch. Without it,
-VoiceBox simply runs without the AI voice. Real-time AI conversion needs an
-NVIDIA GPU.
+`setup/Build-Setup.bat` builds `VoiceBoxSetup.exe`: one click installs
+Python, the libraries and VB-CABLE if missing, then VoiceBox with a
+Desktop shortcut.
 
 ## Tests
 
-`python tests/run_all.py` - six suites, 100+ checks, headless (no audio
-hardware or window needed): DSP effects math, routing/pause/stop semantics,
-preset behavior, AI worker lifecycle, TTS phrases, and simulated
-keyboard/mouse UI runs.
-
-## Project layout
-
-```
-voicebox.py       launcher: python voicebox.py (same as python -m voicebox)
-voicebox/         the app package
-  config.py         paths, audio constants, presets, default bindings
-  dsp.py            pitch shifter + effect DSP (audio-thread only)
-  state.py          shared runtime state, settings persistence, user presets
-  audio.py          stream callback, device engine, self-listen, recorder
-  soundboard.py     clip loading + the Board controller
-  aivoice.py        RVC worker process lifecycle
-  scenes.py         full-setup snapshots (effects + AI + TTS)
-  cues.py           self-heard blips for AI-ready / mute
-  tts.py            speech rendering, cache, phrase bank
-  controls.py       controls.json parsing + global hotkeys
-  ui.py             the pygame window (menu, grid, TTS panel)
-  app.py            wiring + main()
-rvc_worker.py     headless RVC realtime worker (runs on RVC's runtime python)
-rvc/              AI voice package: RVC runtime, weights/*.pth voices,
-                  logs/*.index, hubert_base.pt, rmvpe.pt (not committed)
-VoiceBox.bat      run-from-source launcher (auto-installs deps)
-controls.json     input bindings (delete to restore defaults)
-settings.json     your dialed-in values, restored on launch (not committed)
-user_presets.json your saved presets (not committed)
-scenes.json       your saved scenes (not committed)
-sounds/           your soundboard clips (not committed)
-tts_phrases.json  your saved TTS phrases (not committed)
-tts_cache/        rendered TTS audio, rebuilt on demand (not committed)
-assets/fonts/     bundled UI fonts (Space Grotesk, JetBrains Mono)
-design/           UI skin spec (tokens + mockup) the interface is ported from
-setup/            VoiceBoxSetup.exe bootstrapper source + build script
-tests/            regression suites (run_all.py)
-```
+`python tests/run_all.py` - headless, no audio hardware or window needed.
