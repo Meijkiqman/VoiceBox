@@ -283,6 +283,14 @@ def poke():
     key(pygame.K_RETURN)                     # reopen: still on the renamed one
     key(pygame.K_DELETE)                     # delete it
     snaps.append(list(ui_sc.names()))
+    # a mouse-wheel tick also arrives as a legacy button-4/5 press on
+    # Windows: it must scroll the picker, never close it
+    pygame.event.post(pygame.event.Event(pygame.MOUSEBUTTONDOWN, button=5,
+                                         pos=(150, 138)))
+    pygame.event.post(pygame.event.Event(pygame.MOUSEWHEEL, x=0, y=-1))
+    time.sleep(0.1)
+    key(pygame.K_RETURN)                     # picker still open: picks "beta"
+    snaps.append(ui_sc.applied)
     key(pygame.K_ESCAPE)
     pygame.event.post(pygame.event.Event(pygame.QUIT))
 
@@ -299,6 +307,8 @@ check("UI dropdown rename/delete survives", not ui_error,
 check("F2 + typing renamed the scene in place",
       snaps and snaps[0] == ["zulu", "beta"], str(snaps))
 check("Del removed the renamed scene",
-      len(snaps) == 2 and snaps[1] == ["beta"], str(snaps))
+      len(snaps) >= 2 and snaps[1] == ["beta"], str(snaps))
+check("wheel-legacy button press does not close the picker",
+      len(snaps) == 3 and snaps[2] == "beta", str(snaps))
 
 finish()

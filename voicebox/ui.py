@@ -1097,9 +1097,10 @@ def run_ui(state, stop_flag, dev_line, err_line="", monitor=None, board=None,
                     drop_rename_end(True)
                 elif event.key == pygame.K_ESCAPE:
                     drop_rename_end(False)
-            elif event.type == pygame.MOUSEBUTTONDOWN:
+            elif (event.type == pygame.MOUSEBUTTONDOWN
+                    and event.button in (1, 2, 3)):
                 drop_rename_end(True)          # clicking elsewhere confirms
-            return
+            return                             # (buttons 4+: wheel/side, skip)
         if event.type == pygame.KEYDOWN:
             held_keys.add(event.key)
             act = key_action(event.key)
@@ -1133,8 +1134,11 @@ def run_ui(state, stop_flag, dev_line, err_line="", monitor=None, board=None,
                 else:
                     drop["sel"] = i
                     drop_pick()
-        elif event.type == pygame.MOUSEBUTTONDOWN:
-            drop_close()
+        elif event.type == pygame.MOUSEBUTTONDOWN and event.button == 2:
+            drop_close()                   # middle click closes; buttons 4+
+                                           # are wheel-legacy events (Windows
+                                           # sends them with every MOUSEWHEEL)
+                                           # and must not kill the picker
         elif event.type == pygame.JOYBUTTONDOWN:
             if   event.button in pad_select: drop_pick()
             elif event.button in pad_back:   drop_close()
