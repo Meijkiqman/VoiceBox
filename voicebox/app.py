@@ -9,6 +9,7 @@ from .audio import AudioEngine, LocalPlayer, Monitor, Recorder
 from .controls import GlobalHotkeys
 from .cues import Cues
 from .harvester import Harvester
+from .listener import Listener
 from .scenes import Scenes
 from .soundboard import Board
 from .state import State, load_settings, save_settings, settings_autosave
@@ -46,6 +47,9 @@ def main():
     if state.harvest_on:               # persisted toggle: resume collecting
         harvester.start()
     trainer = Trainer(state, ai=ai, harvester=harvester)
+    listener = Listener(state, translator, player=player)
+    if state.listen_on:                # persisted toggle: resume listening
+        listener.start()
     hotkeys = GlobalHotkeys(state, board, ai=ai, scenes=scenes,
                             translator=translator)
     recorder = Recorder(state)
@@ -54,12 +58,13 @@ def main():
     try:
         run_ui(state, stop_flag, engine.dev_line, engine.error, monitor,
                board, ai, tts, hotkeys, engine, recorder, scenes,
-               translator, harvester, trainer)
+               translator, harvester, trainer, listener)
     except KeyboardInterrupt:
         pass
     finally:
         save_settings(state.snapshot())
         recorder.close()               # before the stream: flush what's queued
+        listener.stop()
         harvester.stop()
         hotkeys.close()
         ai.close()

@@ -47,7 +47,8 @@ class Menu:
 
     def __init__(self, state, stop_flag, monitor=None, board=None, ai=None,
                  hotkeys=None, engine=None, recorder=None, tts=None,
-                 scenes=None, translator=None, harvester=None, trainer=None):
+                 scenes=None, translator=None, harvester=None, trainer=None,
+                 listener=None):
         self.state = state
         self.stop_flag = stop_flag
         self.monitor = monitor
@@ -61,6 +62,7 @@ class Menu:
         self.translator = translator
         self.harvester = harvester
         self.trainer = trainer
+        self.listener = listener
         self.sel = 0
         self.flash = {}               # item index -> flash-until timestamp
         s = state
@@ -207,6 +209,27 @@ class Menu:
                 translator.voice_label,
                 select=lambda: translator.cycle_voice(+1),
                 adjust=translator.cycle_voice))
+        if listener is not None:
+            self.items.append(MenuItem(
+                "Incoming speech",
+                listener.row_label,
+                select=listener.toggle,
+                adjust=lambda d: listener.toggle()))
+            self.items.append(MenuItem(
+                "Listen device",
+                listener.device_label,
+                select=lambda: listener.cycle_device(+1),
+                adjust=listener.cycle_device))
+            self.items.append(MenuItem(
+                "Speak incoming",
+                lambda: "ON" if s.listen_speak else "off",
+                select=self._toggle_listen_speak,
+                adjust=lambda d: self._toggle_listen_speak()))
+            self.items.append(MenuItem(
+                "Listen passthrough",
+                lambda: "ON" if s.listen_pass else "off",
+                select=self._toggle_listen_pass,
+                adjust=lambda d: self._toggle_listen_pass()))
         if harvester is not None:
             self.items.append(MenuItem(
                 "Voice harvest",
@@ -306,6 +329,13 @@ class Menu:
         with self.state.lock:
             self.state.radio = not self.state.radio
 
+    def _toggle_listen_speak(self):
+        with self.state.lock:
+            self.state.listen_speak = not self.state.listen_speak
+
+    def _toggle_listen_pass(self):
+        self.listener.set_passthrough(not self.state.listen_pass)
+
     def _toggle_tts_fx(self):
         with self.state.lock:
             self.state.tts_fx = not self.state.tts_fx
@@ -396,7 +426,8 @@ class Menu:
 
 def run_ui(state, stop_flag, dev_line, err_line="", monitor=None, board=None,
            ai=None, tts=None, hotkeys=None, engine=None, recorder=None,
-           scenes=None, translator=None, harvester=None, trainer=None):
+           scenes=None, translator=None, harvester=None, trainer=None,
+           listener=None):
     """VoiceBox skin, ported from design/VoiceBox Skin.dc.html.
 
     Faithful to the tokens JSON + motion spec in that file: Space Grotesk for
@@ -506,7 +537,8 @@ def run_ui(state, stop_flag, dev_line, err_line="", monitor=None, board=None,
     if tts is None:
         tts = TTSBank(state, getattr(board, "player", None), monitor, ai)
     menu = Menu(state, stop_flag, monitor, board, ai, hotkeys, engine,
-                recorder, tts, scenes, translator, harvester, trainer)
+                recorder, tts, scenes, translator, harvester, trainer,
+                listener)
     board = menu.board
     kb_action = {a: keys for a, keys in keymap.items()}
 
@@ -1960,6 +1992,27 @@ def run_ui(state, stop_flag, dev_line, err_line="", monitor=None, board=None,
                 chip.set_alpha(int(255 * alpha))
                 rise = int(8 * (1.0 - min(1.0, t_ / 0.16)))
                 screen.blit(chip, (WIN_W - 14 - cw, fy - 10 + rise))
+
+        # --------------------------------------- incoming-speech caption strip
+        if listener is not None:
+            cap_lines = listener.caption_lines(now)
+            if cap_lines:
+                ch = f_foot.get_height() + 6
+                panel_h = 10 + ch * len(cap_lines)
+                cap = pygame.Surface((WIN_W, panel_h), pygame.SRCALPHA)
+                cap.fill((10, 13, 18, 216))
+                cy = 5
+                for ln in cap_lines:
+                    tag, _, rest = ln.partition("]")
+                    ts = T(f_foot, tag + "]", CLR["accent"])
+                    cap.blit(ts, (14, cy))
+                    cap.blit(T(f_foot, rest, CLR["text"]),
+                             (14 + ts.get_width(), cy))
+                    cy += ch
+                screen.blit(cap, (0, VIEW_BOT - panel_h))
+                pygame.draw.line(screen, CLR["strokeSoft"],
+                                 (0, VIEW_BOT - panel_h),
+                                 (WIN_W, VIEW_BOT - panel_h))
 
         # --------------------------------------------- dropdown picker overlay
         if drop is not None:

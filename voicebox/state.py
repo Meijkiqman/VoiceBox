@@ -32,6 +32,9 @@ PERSIST_FIELDS = {
     "cues_on":      bool,
     "clips_to_mic": bool,
     "harvest_on":   bool,
+    "listen_on":    bool,
+    "listen_speak": bool,
+    "listen_pass":  bool,
     # str = device/path name or None (None -> the defaults at the top of
     # this file). Persisting names, not indexes: indexes shift across boots.
     "input_device":  str,
@@ -44,6 +47,7 @@ PERSIST_FIELDS = {
     "trans_voice_en": str,     # per-target TTS voice (None = auto-pick)
     "trans_voice_es": str,
     "trans_voice_zh": str,
+    "listen_device": str,      # incoming-speech capture device (None = auto)
 }
 
 
@@ -123,6 +127,10 @@ class State:
         self.trans_tap = None         # Queue while capturing (raw mic blocks)
         self.harvest_on = False       # collect own-voice training clips
         self.harvest_q = None         # Queue while harvesting (raw mic blocks)
+        self.listen_on = False        # incoming speech translator
+        self.listen_device = None     # capture device name; None = auto (CABLE-B)
+        self.listen_speak = False     # also speak captions on the speakers
+        self.listen_pass = True       # pass captured audio through to speakers
         self.ai_mute = False          # AI worker owns the voice; mute ours
         self.ai_fx = False            # AI voice through the effect chain
         self.ai_pitch = 0.0           # transpose INTO the model, semitones

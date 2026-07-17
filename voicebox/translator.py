@@ -71,6 +71,10 @@ class Translator:
         self._jobs = queue.Queue()
         self._whisper = None
         self._argos = None           # argostranslate.translate module when ready
+        # the listener shares these models from its own thread; neither
+        # whisper nor argos promises thread safety, so one lock guards both
+        self.model_lock = threading.RLock()
+        self._no_pack = set()        # language codes we failed to fetch packs for
         self._thread = threading.Thread(target=self._worker, daemon=True)
         self._thread.start()
 
@@ -204,6 +208,10 @@ class Translator:
                 self.phase = ""
 
     def _ensure_models(self):
+        with self.model_lock:
+            self._ensure_models_locked()
+
+    def _ensure_models_locked(self):
         if self._whisper is None:
             self.phase = "loading speech model..."
             try:
@@ -253,19 +261,72 @@ class Translator:
         return self._argos.translate(
             self._argos.translate(text, src, "en"), "en", dst)
 
+    def _ensure_pair(self, src, dst):
+        """Fetch the Argos package(s) for src->dst on demand - the incoming
+        listener meets languages the base install doesn't cover. Failures
+        are remembered so an exotic language doesn't re-hit the network on
+        every utterance."""
+        if src in self._no_pack:
+            raise RuntimeError(f"no translation pack for '{src}'")
+        import argostranslate.package as apkg
+        installed = {(p.from_code, p.to_code)
+                     for p in apkg.get_installed_packages()}
+        if (src, dst) in installed:
+            return
+        need = [p for p in ((src, "en"), ("en", dst))
+                if p[0] != p[1] and p not in installed]
+        if not need:
+            return
+        try:
+            apkg.update_package_index()
+            available = apkg.get_available_packages()
+            for f, t in need:
+                match = [p for p in available
+                         if p.from_code == f and p.to_code == t]
+                if not match:
+                    raise RuntimeError(f"no Argos package {f}->{t}")
+                apkg.install_from_path(match[0].download())
+        except Exception:
+            self._no_pack.add(src)
+            raise RuntimeError(f"no translation pack for '{src}'")
+
+    def transcribe(self, audio48k, language=None):
+        """48 kHz mono float32 -> (text, language code). Shared with the
+        incoming listener; the caller holds no lock."""
+        audio16 = resample_poly(audio48k, 16000,
+                                SAMPLERATE).astype(np.float32)
+        with self.model_lock:
+            segments, info = self._whisper.transcribe(
+                audio16, language=language, beam_size=5, vad_filter=True)
+            text = " ".join(s.text.strip() for s in segments).strip()
+        return text, (language or info.language)
+
+    def translate_utterance(self, audio48k, dst="en"):
+        """The incoming-speech path: transcribe ANY detected language and
+        translate it to dst. Returns (detected, text, translated);
+        translated is None when the utterance is already in dst (or empty).
+        Missing language packs are fetched once on demand."""
+        self._ensure_models()
+        text, detected = self.transcribe(audio48k)
+        if not text:
+            return detected, "", None
+        src = ARGOS_CODE.get(detected, detected)
+        if src == dst:
+            return detected, text, None
+        with self.model_lock:
+            self._ensure_pair(src, dst)
+            out = (self._translate(text, src, dst) or "").strip()
+        return detected, text, out or None
+
     def _process(self, audio):
         self._ensure_models()
         self.phase = "transcribing..."
         src_cfg = self.source()
-        audio16 = resample_poly(audio, 16000, SAMPLERATE).astype(np.float32)
-        segments, info = self._whisper.transcribe(
-            audio16, language=None if src_cfg == "auto" else src_cfg,
-            beam_size=5, vad_filter=True)
-        text = " ".join(s.text.strip() for s in segments).strip()
+        text, detected = self.transcribe(
+            audio, None if src_cfg == "auto" else src_cfg)
         if not text:
             self._report("translator: heard nothing")
             return
-        detected = src_cfg if src_cfg != "auto" else info.language
         src = ARGOS_CODE.get(detected)
         if src is None:
             raise RuntimeError(f"can't translate from '{detected}'")
@@ -274,7 +335,8 @@ class Translator:
             out = text                 # same language: voice-over only
         else:
             self.phase = "translating..."
-            out = (self._translate(text, src, dst) or "").strip()
+            with self.model_lock:
+                out = (self._translate(text, src, dst) or "").strip()
             if not out:
                 raise RuntimeError("translation came back empty")
         self.phase = "speaking..."

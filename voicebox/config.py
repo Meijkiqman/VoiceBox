@@ -24,6 +24,20 @@ TRANS_MODEL    = "small"    # faster-whisper size; override via settings.json
 TRANS_MAX_S    = 30.0       # capture cap per utterance, seconds
 TRANS_MIN_S    = 0.4        # discard blips shorter than this
 
+# Incoming speech translator: listens to what the OTHERS say (route Discord's
+# output to a second virtual cable - e.g. CABLE-B - and pick its "Output" side
+# as the Listen device), captions it in English in the window, optionally
+# speaks it. Utterance segmentation knobs mirror the harvester's.
+LISTEN_DEVICE_HINTS = ("cable-b output", "cable b output")  # auto-pick substrings
+LISTEN_TARGET   = "en"      # incoming translations land in this language
+LISTEN_THRESH_DB = -45.0    # Discord voice is compressed: gate lower than mic
+LISTEN_PRE_S    = 0.3       # pre-roll kept before speech onset
+LISTEN_HANG_S   = 0.6       # trailing silence that ends an utterance
+LISTEN_MIN_S    = 0.8       # ignore blips shorter than this
+LISTEN_MAX_S    = 15.0      # force a cut on monologues, seconds
+LISTEN_CAPTION_S = 12.0     # how long a caption stays on screen
+LISTEN_CAPTION_N = 3        # caption lines shown at once
+
 # Voice harvester: collects clean speech clips from the real mic as training
 # data for an RVC model of the user's own voice (rvc/dataset_self/, or
 # voice_dataset/ when no RVC package is installed).

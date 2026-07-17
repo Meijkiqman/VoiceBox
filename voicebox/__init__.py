@@ -92,7 +92,8 @@ import sounddevice as sd
 import soundfile as sf
 
 from . import (aivoice, app, audio, config, controls, cues, dsp, harvester,
-               scenes, soundboard, state, trainer, translator, tts, ui)
+               listener, scenes, soundboard, state, trainer, translator,
+               tts, ui)
 from .config import *          # noqa: F401,F403 - flat API kept for tests
 from .dsp import *             # noqa: F401,F403
 from .soundboard import *      # noqa: F401,F403
@@ -103,6 +104,7 @@ from .cues import *            # noqa: F401,F403
 from .scenes import *          # noqa: F401,F403
 from .tts import *             # noqa: F401,F403
 from .translator import *      # noqa: F401,F403
+from .listener import *        # noqa: F401,F403
 from .harvester import *       # noqa: F401,F403
 from .trainer import *         # noqa: F401,F403
 from .controls import *        # noqa: F401,F403
