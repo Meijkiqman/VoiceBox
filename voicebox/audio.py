@@ -23,6 +23,22 @@ def make_callback(state):
             state.status_count += 1
         state.in_level = float(np.abs(indata[:, 0]).max())   # feeds the UI mic meter
 
+        # raw-mic mirrors (translator capture, voice harvester): the consumers
+        # need the untouched voice - before gain, gate and effects - so they
+        # tap indata itself. Same drop-never-block contract as the monitor.
+        tap = state.trans_tap
+        if tap is not None:
+            try:
+                tap.put_nowait(indata[:, 0].copy())
+            except queue.Full:
+                pass
+        hq = state.harvest_q
+        if hq is not None:
+            try:
+                hq.put_nowait(indata[:, 0].copy())
+            except queue.Full:
+                pass
+
         # Hold the lock only to copy parameters - never through the DSP, so a
         # UI-thread nudge can't stall the real-time callback.
         with state.lock:
@@ -33,7 +49,7 @@ def make_callback(state):
             doubler, bass = state.doubler, state.bass
             ai_mute, tts_gain = state.ai_mute, state.tts_gain
             ai_fx = state.ai_fx
-            mic_muted = state.mic_muted
+            mic_muted = state.mic_muted or state.trans_hold
             gate_on, gate_db = state.gate_on, state.gate_db
 
         # apply queued UI events (audio thread owns the shifter and voice list)

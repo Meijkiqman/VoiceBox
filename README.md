@@ -33,6 +33,14 @@ Or by hand: `pip install -r requirements.txt`, then `python voicebox.py`.
   the effect chain.
 - **Text to speech** - typed phrases speak into the mic, through the
   effects or the AI voice, with any installed OS voice.
+- **Speech translator** - tap Ctrl+Alt+T, speak Norwegian or English, tap
+  again: the utterance is transcribed, translated (English, Spanish or
+  Mandarin) and spoken into the mic in a native TTS voice - or in *your*
+  RVC voice while the AI voice is live. Offline after first-run downloads;
+  needs `pip install -r requirements-translator.txt`.
+- **Voice harvest + retrain** - collects clean clips of your real voice
+  while you play (`rvc/dataset_self/`) and retrains your own RVC model
+  from them on demand (experimental; see `design/VOICE_TRAINING.md`).
 - **Global hotkeys** - clips, stop, presets, scenes, mute and AI voice
   work while a game has focus (Ctrl+Alt+..., remappable in
   `controls.json`).
@@ -46,6 +54,19 @@ The RVC runtime + voice models (~12 GB) ship separately as a zip of the
 `rvc/` folder; extract it next to `voicebox.py` so `rvc\runtime\python.exe`
 exists and the AI rows appear on next launch. Without it, VoiceBox simply
 runs without the AI voice.
+
+## Speech translator
+
+`pip install -r requirements-translator.txt`, then use the Translate rows
+(or Ctrl+Alt+T): tap, speak, tap again. While it listens your real voice is
+held back from the cable; a moment later the translation speaks into it.
+First use downloads the Whisper model and the Argos language packs (needs
+internet once; everything runs locally after that). "Translate voice"
+auto-picks an installed Windows voice for the target language - install
+natural Spanish/Chinese voices under Settings -> Time & Language -> Speech.
+With the AI voice running, translations are spoken through your RVC model
+instead (note: the worker still carries your original voice while you
+speak; pick a push-to-talk quiet moment, or run without the AI voice live).
 
 ## Installer
 

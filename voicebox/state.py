@@ -31,12 +31,19 @@ PERSIST_FIELDS = {
     "ai_fx":        bool,
     "cues_on":      bool,
     "clips_to_mic": bool,
+    "harvest_on":   bool,
     # str = device/path name or None (None -> the defaults at the top of
     # this file). Persisting names, not indexes: indexes shift across boots.
     "input_device":  str,
     "output_device": str,
     "rvc_dir":       str,
     "tts_voice":     str,
+    "trans_source":  str,      # translator: "auto" | "no" | "en" (None = auto)
+    "trans_target":  str,      # translator: "en" | "es" | "zh" (None = en)
+    "trans_model":   str,      # faster-whisper size (None = config default)
+    "trans_voice_en": str,     # per-target TTS voice (None = auto-pick)
+    "trans_voice_es": str,
+    "trans_voice_zh": str,
 }
 
 
@@ -106,6 +113,16 @@ class State:
         self.tts_gain = 1.0           # TTS level on the mic channel
         self.tts_voice = None         # engine voice name; None = OS default
         self.tts_rate = 0.0           # SAPI -10..10 speaking rate
+        self.trans_source = None      # translator input lang; None = auto
+        self.trans_target = None      # translator output lang; None = en
+        self.trans_model = None       # whisper size; None = config default
+        self.trans_voice_en = None    # per-target TTS voice; None = auto-pick
+        self.trans_voice_es = None
+        self.trans_voice_zh = None
+        self.trans_hold = False       # capturing: outgoing voice path silent
+        self.trans_tap = None         # Queue while capturing (raw mic blocks)
+        self.harvest_on = False       # collect own-voice training clips
+        self.harvest_q = None         # Queue while harvesting (raw mic blocks)
         self.ai_mute = False          # AI worker owns the voice; mute ours
         self.ai_fx = False            # AI voice through the effect chain
         self.ai_pitch = 0.0           # transpose INTO the model, semitones

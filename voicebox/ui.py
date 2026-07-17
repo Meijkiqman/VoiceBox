@@ -47,7 +47,7 @@ class Menu:
 
     def __init__(self, state, stop_flag, monitor=None, board=None, ai=None,
                  hotkeys=None, engine=None, recorder=None, tts=None,
-                 scenes=None):
+                 scenes=None, translator=None, harvester=None, trainer=None):
         self.state = state
         self.stop_flag = stop_flag
         self.monitor = monitor
@@ -58,6 +58,9 @@ class Menu:
         self.recorder = recorder
         self.tts = tts
         self.scenes = scenes
+        self.translator = translator
+        self.harvester = harvester
+        self.trainer = trainer
         self.sel = 0
         self.flash = {}               # item index -> flash-until timestamp
         s = state
@@ -183,6 +186,38 @@ class Menu:
                 lambda: f"{s.tts_rate:+.0f}" if s.tts_rate else "normal",
                 select=self._reset_tts_rate,
                 adjust=self._adjust_tts_rate))
+        if translator is not None:
+            self.items.append(MenuItem(
+                "Translate",
+                translator.row_label,
+                select=translator.toggle,
+                adjust=lambda d: translator.toggle()))
+            self.items.append(MenuItem(
+                "Translate to",
+                translator.target_label,
+                select=lambda: translator.cycle_target(+1),
+                adjust=translator.cycle_target))
+            self.items.append(MenuItem(
+                "Translate from",
+                translator.source_label,
+                select=lambda: translator.cycle_source(+1),
+                adjust=translator.cycle_source))
+            self.items.append(MenuItem(
+                "Translate voice",
+                translator.voice_label,
+                select=lambda: translator.cycle_voice(+1),
+                adjust=translator.cycle_voice))
+        if harvester is not None:
+            self.items.append(MenuItem(
+                "Voice harvest",
+                harvester.label,
+                select=harvester.toggle,
+                adjust=lambda d: harvester.toggle()))
+        if trainer is not None and trainer.available:
+            self.items.append(MenuItem(
+                "Retrain AI voice",
+                trainer.label,
+                select=trainer.launch))
         if recorder is not None:
             self.items.append(MenuItem(
                 "Record output",
@@ -361,7 +396,7 @@ class Menu:
 
 def run_ui(state, stop_flag, dev_line, err_line="", monitor=None, board=None,
            ai=None, tts=None, hotkeys=None, engine=None, recorder=None,
-           scenes=None):
+           scenes=None, translator=None, harvester=None, trainer=None):
     """VoiceBox skin, ported from design/VoiceBox Skin.dc.html.
 
     Faithful to the tokens JSON + motion spec in that file: Space Grotesk for
@@ -471,7 +506,7 @@ def run_ui(state, stop_flag, dev_line, err_line="", monitor=None, board=None,
     if tts is None:
         tts = TTSBank(state, getattr(board, "player", None), monitor, ai)
     menu = Menu(state, stop_flag, monitor, board, ai, hotkeys, engine,
-                recorder, tts, scenes)
+                recorder, tts, scenes, translator, harvester, trainer)
     board = menu.board
     kb_action = {a: keys for a, keys in keymap.items()}
 

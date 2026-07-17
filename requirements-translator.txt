@@ -1,0 +1,6 @@
+# Optional: the speech translator (Translate rows / Ctrl+Alt+T).
+#   pip install -r requirements-translator.txt
+# First use downloads the Whisper model (~500 MB) and the Argos language
+# packs (Norwegian/English -> English/Spanish/Mandarin); both cache locally.
+faster-whisper
+argostranslate

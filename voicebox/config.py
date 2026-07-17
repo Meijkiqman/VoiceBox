@@ -13,6 +13,28 @@ TTS_PHRASES_PATH = BASE_DIR / "tts_phrases.json"  # saved TTS phrases
 TTS_CACHE_DIR    = BASE_DIR / "tts_cache"         # rendered wavs, keyed by text hash
 TTS_MAX_CHARS    = 200                            # per-phrase length cap
 
+# Speech translator (optional deps: faster-whisper + argostranslate).
+# Tap the hotkey / row, speak, tap again: the utterance is transcribed,
+# translated and spoken into the cable in the target language's TTS voice
+# (through the effects or the AI voice, like a typed phrase).
+TRANS_SOURCES  = [("auto", "auto"), ("no", "Norwegian"), ("en", "English")]
+TRANS_TARGETS  = [("en", "English"), ("es", "Spanish"), ("zh", "Mandarin")]
+TRANS_MODEL    = "small"    # faster-whisper size; override via settings.json
+                            # "trans_model" ("base" = lighter, "medium" = better)
+TRANS_MAX_S    = 30.0       # capture cap per utterance, seconds
+TRANS_MIN_S    = 0.4        # discard blips shorter than this
+
+# Voice harvester: collects clean speech clips from the real mic as training
+# data for an RVC model of the user's own voice (rvc/dataset_self/, or
+# voice_dataset/ when no RVC package is installed).
+HARVEST_DIRNAME  = "dataset_self"   # under the RVC folder
+HARVEST_THRESH_DB = -38.0   # block peak above this counts as speech
+HARVEST_PRE_S    = 0.25     # pre-roll kept before speech onset
+HARVEST_HANG_S   = 0.5      # trailing silence that ends a clip
+HARVEST_MIN_S    = 2.0      # clips shorter than this are dropped
+HARVEST_MAX_S    = 12.0     # clips are cut at this length
+HARVEST_CAP_MIN  = 60.0     # stop collecting past this many minutes
+
 SAMPLERATE = 48000        # VB-CABLE runs at 48k by default
 BLOCKSIZE  = 512          # smaller = lower latency, larger = safer. 256-1024 typical
 CHANNELS   = 1            # mono processing path
@@ -89,6 +111,8 @@ DEFAULT_CONTROLS = {
         "next_scene":  "ctrl+alt+s",
         "mute":        "ctrl+alt+m",
         "ai_voice":    "ctrl+alt+a",
+        "translate":   "ctrl+alt+t",   # tap: start listening, tap again: speak
+                                       # the translation into the mic
         # push-to-talk: a single key name; while held the mic is live, on
         # release it mutes. Empty = off (mute stays a manual toggle).
         "ptt":         "",
