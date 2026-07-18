@@ -56,8 +56,9 @@ the AI voice while the RVC worker is live; off = clean TTS.
 
 SPEECH TRANSLATOR
 -----------------
-Tap Ctrl+Alt+T (or the Translate row), speak Norwegian or English, tap
-again: the utterance is transcribed (faster-whisper), translated offline
+Tap Ctrl+Alt+T (or the Translate row) and speak Norwegian or English;
+when you stop talking the capture sends itself (a second tap just cuts
+it short). It is transcribed (faster-whisper), translated offline
 (Argos) to English, Spanish or Mandarin, and spoken into the mic channel
 with a per-language OS voice - through the effect chain, or through the
 AI voice while the RVC worker is live. Your real voice is held back from

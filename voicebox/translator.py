@@ -15,8 +15,9 @@ import time
 import numpy as np
 from scipy.signal import resample_poly
 
-from .config import (BLOCKSIZE, SAMPLERATE, TRANS_MAX_S, TRANS_MIN_S,
-                     TRANS_MODEL, TRANS_SOURCES, TRANS_TARGETS)
+from .config import (BLOCKSIZE, SAMPLERATE, TRANS_AUTO_STOP_S, TRANS_IDLE_S,
+                     TRANS_MAX_S, TRANS_MIN_S, TRANS_MODEL, TRANS_SPEECH_DB,
+                     TRANS_SOURCES, TRANS_TARGETS)
 from .tts import tts_synthesize
 
 # Whisper reports ISO codes; Argos wants "nb" for Norwegian (Bokmål - "nn"
@@ -138,12 +139,12 @@ class Translator:
     def row_label(self):
         """The Translate row's value text."""
         if self.capturing:
-            return "LISTENING - tap to speak"
+            return "LISTENING - just speak"
         if self.phase:
             return self.phase
         if self.error:
             return "error - see status"
-        return "tap and speak"
+        return "Ctrl+Alt+T, speak"
 
     # ---- capture ----
 
@@ -167,11 +168,43 @@ class Translator:
             self.state.trans_tap = tap
             self.state.trans_hold = True   # listeners don't hear the original
         self.capturing = True
+        # hands-free: a stretch of silence after speech sends the capture by
+        # itself - the second tap is only ever needed to cut a capture short
+        threading.Thread(target=self._auto_stop, args=(tap,),
+                         daemon=True).start()
         if self.state.ai_mute:
             # the RVC worker reads the mic itself; we can't hold that back
             self._report("translating (note: AI voice still carries the original)")
         else:
-            self._report(f"translating {self.source_label()} -> {self.target_label()} - speak, then tap again")
+            self._report(f"translating {self.source_label()} -> "
+                         f"{self.target_label()} - speak, it sends itself")
+
+    def _auto_stop(self, tap):
+        """Watch the mic meter while capturing: once speech has been heard,
+        TRANS_AUTO_STOP_S of silence ends the capture as if the user tapped
+        again; TRANS_IDLE_S with no speech at all gives up. Exits quietly
+        the moment a manual tap (or a newer capture) takes over."""
+        thresh = 10.0 ** (TRANS_SPEECH_DB / 20.0)
+        t0 = time.time()
+        heard = False
+        quiet_since = None
+        while True:
+            time.sleep(0.05)
+            with self._lock:
+                if not self.capturing or self.state.trans_tap is not tap:
+                    return             # manual stop, or not our capture anymore
+                now = time.time()
+                if self.state.in_level >= thresh:
+                    heard, quiet_since = True, None
+                elif heard:
+                    quiet_since = quiet_since or now
+                    if now - quiet_since >= TRANS_AUTO_STOP_S:
+                        self._stop_capture()
+                        return
+                if now - t0 >= TRANS_MAX_S or (not heard
+                                               and now - t0 >= TRANS_IDLE_S):
+                    self._stop_capture()
+                    return
 
     def _stop_capture(self):
         with self.state.lock:

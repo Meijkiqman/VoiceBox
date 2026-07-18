@@ -23,6 +23,9 @@ TRANS_MODEL    = "small"    # faster-whisper size; override via settings.json
                             # "trans_model" ("base" = lighter, "medium" = better)
 TRANS_MAX_S    = 30.0       # capture cap per utterance, seconds
 TRANS_MIN_S    = 0.4        # discard blips shorter than this
+TRANS_SPEECH_DB = -38.0     # mic level that counts as "started talking"
+TRANS_AUTO_STOP_S = 1.2     # trailing silence that auto-sends the capture
+TRANS_IDLE_S   = 8.0        # give up when nothing was said at all
 
 # Incoming speech translator: listens to what the OTHERS say (route Discord's
 # output to a second virtual cable - e.g. CABLE-B - and pick its "Output" side

@@ -213,6 +213,24 @@ tr2.toggle()
 check("capture still possible after listener use", tr2.capturing)
 tr2.toggle()
 
+# ---- hands-free: silence after speech auto-sends the capture ----
+with state.lock:
+    state.trans_source, state.trans_target = "en", "en"
+tr.toggle()
+tap = state.trans_tap
+blk = np.random.default_rng(3).normal(0, 0.1, 512).astype(np.float32)
+for _ in range(120):                   # ~1.3 s of audio in the tap
+    tap.put_nowait(blk)
+state.in_level = 0.5                   # the mic meter says: speaking
+time.sleep(0.25)
+state.in_level = 0.0                   # ...done speaking
+t0 = time.time()
+while tr.capturing and time.time() - t0 < 4.0:
+    time.sleep(0.05)
+check("auto-send stops capture", not tr.capturing)
+check("auto-send translates", wait_event(state) is not None)
+wait_idle(tr)
+
 # ---- a transient pack-fetch failure must stay retryable ----
 # (this file's apkg stub raises from update_package_index = network down;
 # that must NOT blacklist the language like a definitive index miss does)
