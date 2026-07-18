@@ -32,8 +32,12 @@ def make_callback(state):
                 tap.put_nowait(indata[:, 0].copy())
             except queue.Full:
                 pass
+        # muted means off the record: PTT users leave harvest on all night,
+        # and what the mic hears while muted (in-room conversation) must not
+        # end up in the training dataset. trans_hold still harvests - that's
+        # the user deliberately speaking, just held back from the cable.
         hq = state.harvest_q
-        if hq is not None:
+        if hq is not None and not state.mic_muted:
             try:
                 hq.put_nowait(indata[:, 0].copy())
             except queue.Full:
@@ -416,6 +420,8 @@ class LocalPlayer:
         self.voices = []                   # [samples, cursor]; callback-owned
         self.events = queue.Queue()
         self.error = ""
+        self._open_lock = threading.Lock() # translator/listener workers and
+                                           # the UI can all race first-play
 
     def play(self, i):
         if self._ensure():
@@ -430,6 +436,10 @@ class LocalPlayer:
         self.events.put("stop")
 
     def _ensure(self):
+        with self._open_lock:
+            return self._ensure_locked()
+
+    def _ensure_locked(self):
         if self.stream is not None:
             return True
         try:

@@ -54,6 +54,33 @@ its row deletes it. With "TTS voice FX" on (menu row or the FX chip) the
 speech runs through the same pitch/effect chain as your voice - and through
 the AI voice while the RVC worker is live; off = clean TTS.
 
+SPEECH TRANSLATOR
+-----------------
+Tap Ctrl+Alt+T (or the Translate row), speak Norwegian or English, tap
+again: the utterance is transcribed (faster-whisper), translated offline
+(Argos) to English, Spanish or Mandarin, and spoken into the mic channel
+with a per-language OS voice - through the effect chain, or through the
+AI voice while the RVC worker is live. Your real voice is held back from
+the cable while it listens. Optional install:
+pip install -r requirements-translator.txt.
+
+INCOMING SPEECH
+---------------
+Captions what the others say. Route Discord's output to a second virtual
+cable (CABLE-B) and pick its Output side as the "Listen device" row; the
+chat passes through to your speakers while non-English utterances are
+captioned in English at the bottom of the window ("Speak incoming" reads
+them aloud). Language packs download on first encounter per language.
+
+VOICE HARVEST + RETRAIN
+-----------------------
+With "Voice harvest" on, clean clips of your raw mic speech (never while
+muted) are saved to rvc/dataset_self/ as RVC training data, up to a
+60-minute cap. "Retrain AI voice" trains/refreshes the MyVoice model
+from them in a separate console window (experimental - the training
+pieces from the full RVC-beta0717 zip must be present; see
+design/VOICE_TRAINING.md).
+
 SCENES
 ------
 A scene is the whole persona in one row: the effect dialing, the AI

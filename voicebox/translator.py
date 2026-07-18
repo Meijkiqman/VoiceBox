@@ -15,8 +15,8 @@ import time
 import numpy as np
 from scipy.signal import resample_poly
 
-from .config import (SAMPLERATE, TRANS_MAX_S, TRANS_MIN_S, TRANS_MODEL,
-                     TRANS_SOURCES, TRANS_TARGETS)
+from .config import (BLOCKSIZE, SAMPLERATE, TRANS_MAX_S, TRANS_MIN_S,
+                     TRANS_MODEL, TRANS_SOURCES, TRANS_TARGETS)
 from .tts import tts_synthesize
 
 # Whisper reports ISO codes; Argos wants "nb" for Norwegian (Bokmål - "nn"
@@ -70,6 +70,7 @@ class Translator:
         self._lock = threading.Lock()
         self._jobs = queue.Queue()
         self._whisper = None
+        self._device = "cpu"         # where whisper actually loaded
         self._argos = None           # argostranslate.translate module when ready
         # the listener shares these models from its own thread; neither
         # whisper nor argos promises thread safety, so one lock guards both
@@ -161,7 +162,7 @@ class Translator:
         if self.phase:                 # still working on the last utterance
             self._report("translator: busy - " + self.phase)
             return
-        tap = queue.Queue(maxsize=int(TRANS_MAX_S * SAMPLERATE / 256) + 64)
+        tap = queue.Queue(maxsize=int(TRANS_MAX_S * SAMPLERATE / BLOCKSIZE) + 64)
         with self.state.lock:
             self.state.trans_tap = tap
             self.state.trans_hold = True   # listeners don't hear the original
@@ -207,48 +208,72 @@ class Translator:
             finally:
                 self.phase = ""
 
-    def _ensure_models(self):
-        with self.model_lock:
-            self._ensure_models_locked()
-
-    def _ensure_models_locked(self):
-        if self._whisper is None:
-            self.phase = "loading speech model..."
+    def warm(self):
+        """Background model preload at startup - only when the optional deps
+        are already installed - so the first hotkey tap doesn't sit behind a
+        minutes-long load/download. Failures stay silent here; the first
+        real use reports them properly."""
+        def job():
             try:
-                from faster_whisper import WhisperModel
+                import faster_whisper              # noqa: F401
+                import argostranslate.package      # noqa: F401
             except ImportError:
-                raise RuntimeError(
-                    "needs: pip install faster-whisper argostranslate")
-            name = self.state.trans_model or TRANS_MODEL
+                return                             # feature not installed
             try:
-                self._whisper = WhisperModel(name, device="auto",
-                                             compute_type="default")
+                self._ensure_models()
             except Exception:
-                # no CUDA runtime / half-precision unsupported: plain CPU int8
-                self._whisper = WhisperModel(name, device="cpu",
-                                             compute_type="int8")
-        if self._argos is None:
-            self.phase = "loading translation..."
+                pass
+        threading.Thread(target=job, daemon=True).start()
+
+    def _load_whisper(self, cpu=False):
+        from faster_whisper import WhisperModel
+        name = self.state.trans_model or TRANS_MODEL
+        if not cpu:
             try:
-                import argostranslate.package as apkg
-                import argostranslate.translate as atrans
-            except ImportError:
-                raise RuntimeError(
-                    "needs: pip install faster-whisper argostranslate")
-            installed = {(p.from_code, p.to_code)
-                         for p in apkg.get_installed_packages()}
-            missing = [p for p in ARGOS_PAIRS if p not in installed]
-            if missing:
-                self.phase = "downloading language packs..."
-                apkg.update_package_index()
-                available = apkg.get_available_packages()
-                for f, t in missing:
-                    match = [p for p in available
-                             if p.from_code == f and p.to_code == t]
-                    if not match:
-                        raise RuntimeError(f"no Argos package {f}->{t}")
-                    apkg.install_from_path(match[0].download())
-            self._argos = atrans
+                return WhisperModel(name, device="auto",
+                                    compute_type="default"), "auto"
+            except Exception:
+                pass       # no CUDA runtime / half-precision unsupported
+        return WhisperModel(name, device="cpu", compute_type="int8"), "cpu"
+
+    def _ensure_models(self, announce=False):
+        """Load whisper + argos once. Only the outgoing worker announces
+        progress on self.phase (its finally clears it); the listener's
+        thread must never write phase or the Translate row would report
+        busy forever."""
+        def note(msg):
+            if announce:
+                self.phase = msg
+        with self.model_lock:
+            if self._whisper is None:
+                note("loading speech model...")
+                try:
+                    self._whisper, self._device = self._load_whisper()
+                except ImportError:
+                    raise RuntimeError(
+                        "needs: pip install faster-whisper argostranslate")
+            if self._argos is None:
+                note("loading translation...")
+                try:
+                    import argostranslate.package as apkg
+                    import argostranslate.translate as atrans
+                except ImportError:
+                    raise RuntimeError(
+                        "needs: pip install faster-whisper argostranslate")
+                installed = {(p.from_code, p.to_code)
+                             for p in apkg.get_installed_packages()}
+                missing = [p for p in ARGOS_PAIRS if p not in installed]
+                if missing:
+                    note("downloading language packs...")
+                    apkg.update_package_index()
+                    available = apkg.get_available_packages()
+                    for f, t in missing:
+                        match = [p for p in available
+                                 if p.from_code == f and p.to_code == t]
+                        if not match:
+                            raise RuntimeError(f"no Argos package {f}->{t}")
+                        apkg.install_from_path(match[0].download())
+                self._argos = atrans
 
     def _translate(self, text, src, dst):
         """Argos translation; pairs without a direct package pivot through
@@ -263,9 +288,9 @@ class Translator:
 
     def _ensure_pair(self, src, dst):
         """Fetch the Argos package(s) for src->dst on demand - the incoming
-        listener meets languages the base install doesn't cover. Failures
-        are remembered so an exotic language doesn't re-hit the network on
-        every utterance."""
+        listener meets languages the base install doesn't cover. Only a
+        definitive "the index has no such pack" is remembered in _no_pack;
+        a network hiccup stays retryable on the next utterance."""
         if src in self._no_pack:
             raise RuntimeError(f"no translation pack for '{src}'")
         import argostranslate.package as apkg
@@ -280,25 +305,46 @@ class Translator:
         try:
             apkg.update_package_index()
             available = apkg.get_available_packages()
-            for f, t in need:
-                match = [p for p in available
-                         if p.from_code == f and p.to_code == t]
-                if not match:
-                    raise RuntimeError(f"no Argos package {f}->{t}")
-                apkg.install_from_path(match[0].download())
         except Exception:
-            self._no_pack.add(src)
-            raise RuntimeError(f"no translation pack for '{src}'")
+            raise RuntimeError(f"pack fetch for '{src}' failed (offline?)")
+        matches = {}
+        for f, t in need:
+            match = [p for p in available
+                     if p.from_code == f and p.to_code == t]
+            if not match:
+                self._no_pack.add(src)         # the index simply has no pack
+                raise RuntimeError(f"no translation pack for '{src}'")
+            matches[(f, t)] = match[0]
+        try:
+            for pack in matches.values():
+                apkg.install_from_path(pack.download())
+        except Exception:
+            raise RuntimeError(f"pack download for '{src}' failed - will retry")
 
     def transcribe(self, audio48k, language=None):
         """48 kHz mono float32 -> (text, language code). Shared with the
         incoming listener; the caller holds no lock."""
         audio16 = resample_poly(audio48k, 16000,
                                 SAMPLERATE).astype(np.float32)
-        with self.model_lock:
+
+        def run():
+            # faster-whisper decodes lazily: errors surface while iterating
+            # segments, so the join belongs inside the retry scope
             segments, info = self._whisper.transcribe(
                 audio16, language=language, beam_size=5, vad_filter=True)
             text = " ".join(s.text.strip() for s in segments).strip()
+            return text, info
+
+        with self.model_lock:
+            try:
+                text, info = run()
+            except Exception:
+                if self._device == "cpu":
+                    raise
+                # GPU hiccup - typically VRAM taken by the live RVC worker.
+                # Rebuild on CPU int8 once and keep going; slower beats dead.
+                self._whisper, self._device = self._load_whisper(cpu=True)
+                text, info = run()
         return text, (language or info.language)
 
     def translate_utterance(self, audio48k, dst="en"):
@@ -319,7 +365,7 @@ class Translator:
         return detected, text, out or None
 
     def _process(self, audio):
-        self._ensure_models()
+        self._ensure_models(announce=True)
         self.phase = "transcribing..."
         src_cfg = self.source()
         text, detected = self.transcribe(

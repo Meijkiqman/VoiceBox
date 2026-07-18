@@ -57,6 +57,9 @@ class Trainer:
                          f"'Voice harvest' and talk; {MIN_MINUTES:.0f}+ min "
                          "needed, ~30 is ideal")
             return False
+        if self.harvester is not None and self.harvester.on:
+            self.harvester.toggle()    # stop writing into the folder the
+                                       # trainer is about to read
         dataset = (self.harvester.dir if self.harvester is not None
                    else self.rvc_dir / "dataset_self")
         cmd = [str(self.rvc_dir / "runtime" / "python.exe"),

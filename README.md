@@ -38,14 +38,15 @@ Or by hand: `pip install -r requirements.txt`, then `python voicebox.py`.
   Mandarin) and spoken into the mic in a native TTS voice - or in *your*
   RVC voice while the AI voice is live. Offline after first-run downloads;
   needs `pip install -r requirements-translator.txt`.
-- **Incoming translator** - captions what the others say, in English, at
-  the bottom of the window (optionally spoken aloud). Route Discord's
-  output to a second cable (CABLE-B) and flip "Incoming speech" on; any
-  language Whisper detects gets translated, packs download on first
-  encounter.
+- **Incoming translator** - captions non-English speech from the voice
+  chat, in English, at the bottom of the window (optionally spoken
+  aloud); English passes through uncaptioned. Route Discord's output to
+  a second cable (CABLE-B) and flip "Incoming speech" on; any language
+  Whisper detects gets translated, packs download on first encounter.
 - **Voice harvest + retrain** - collects clean clips of your real voice
-  while you play (`rvc/dataset_self/`) and retrains your own RVC model
-  from them on demand (experimental; see `design/VOICE_TRAINING.md`).
+  while you play (`rvc/dataset_self/`; never while the mic is muted) and
+  retrains your own RVC model from them on demand (experimental; see
+  `design/VOICE_TRAINING.md`).
 - **Global hotkeys** - clips, stop, presets, scenes, mute and AI voice
   work while a game has focus (Ctrl+Alt+..., remappable in
   `controls.json`).
@@ -78,8 +79,9 @@ speak; pick a push-to-talk quiet moment, or run without the AI voice live).
 Discord -> Voice & Video -> *Output* Device = **CABLE-B Input**, and pick
 **CABLE-B Output** as the "Listen device" row (it auto-picks when found).
 While "Incoming speech" is on, the chat is passed through to your speakers
-untouched and every utterance is captioned in English at the bottom of the
-window a few seconds later; "Speak incoming" reads the captions aloud too.
+untouched and non-English utterances are captioned in English at the
+bottom of the window a few seconds later (English speech needs no caption
+and gets none); "Speak incoming" reads the captions aloud too.
 Uses the same translator install; language packs beyond
 Norwegian/Spanish/Mandarin download automatically the first time someone
 speaks them.

@@ -192,6 +192,37 @@ check("cycle target moves on", state.trans_target == "zh")
 tr.cycle_source(+1)
 check("cycle source moves on", state.trans_source in ("no", "en", "auto"))
 
+# ---- busy guard: a tap while the pipeline works is refused, not queued ----
+tr.phase = "working..."
+tr.toggle()
+check("busy tap refused", not tr.capturing and state.trans_tap is None)
+check("busy tap reported", "busy" in state.status_msg)
+tr.phase = ""
+
+# ---- regression: a listener-driven model load must not leak into phase ----
+# (phase is owned by the outgoing worker; translate_utterance runs on the
+# listener's thread and once left phase="loading translation..." forever,
+# permanently refusing every capture toggle as busy)
+tr2 = Translator(state, voices_fn=lambda: VOICES)
+det, text, out = tr2.translate_utterance(
+    np.random.default_rng(1).normal(0, 0.1, SAMPLERATE).astype(np.float32),
+    "en")
+check("utterance translated", out is not None and "[nb->en]" in out)
+check("no phase leak from listener path", tr2.phase == "")
+tr2.toggle()
+check("capture still possible after listener use", tr2.capturing)
+tr2.toggle()
+
+# ---- a transient pack-fetch failure must stay retryable ----
+# (this file's apkg stub raises from update_package_index = network down;
+# that must NOT blacklist the language like a definitive index miss does)
+try:
+    tr2._ensure_pair("de", "en")
+    check("transient fetch raises", False)
+except RuntimeError as e:
+    check("transient fetch raises", "failed" in str(e))
+check("transient failure not blacklisted", "de" not in tr2._no_pack)
+
 # ---- settings round-trip ----
 with state.lock:
     state.trans_source, state.trans_target = "no", "zh"

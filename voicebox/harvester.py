@@ -92,8 +92,10 @@ class Harvester:
             return
         q = queue.Queue(maxsize=256)   # ~2.7 s headroom; drop, never block
         self._stop = threading.Event()
-        self._thread = threading.Thread(target=self._worker, args=(q,),
-                                        daemon=True)
+        # stop event passed as an arg: the worker must keep honoring ITS
+        # event even if a quick stop()/start() has already replaced self._stop
+        self._thread = threading.Thread(target=self._worker,
+                                        args=(q, self._stop), daemon=True)
         self._thread.start()
         self.state.harvest_q = q
         self.error = ""
@@ -101,6 +103,7 @@ class Harvester:
     def stop(self):
         q = self.state.harvest_q
         self.state.harvest_q = None    # callback stops feeding immediately
+        t, self._thread = self._thread, None
         if self._stop is not None:
             self._stop.set()
         if q is not None:
@@ -108,9 +111,10 @@ class Harvester:
                 q.put_nowait(None)     # unblock the worker's get()
             except queue.Full:
                 pass                   # worker wakes on its own timeout
-        self._thread = None
+        if t is not None and t is not threading.current_thread():
+            t.join(timeout=2.0)        # let a clip mid-write land intact
 
-    def _worker(self, q):
+    def _worker(self, q, stop):
         thresh = 10.0 ** (HARVEST_THRESH_DB / 20.0)
         pre_max = int(HARVEST_PRE_S * SAMPLERATE)
         hang_max = HARVEST_HANG_S
@@ -118,7 +122,7 @@ class Harvester:
         pre_len = 0
         seg = None                     # list of blocks while inside speech
         quiet = 0.0                    # trailing silence inside a segment, s
-        while not self._stop.is_set():
+        while not stop.is_set():
             try:
                 block = q.get(timeout=0.5)
             except queue.Empty:

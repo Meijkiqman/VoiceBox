@@ -55,7 +55,9 @@ class _Pkg:
 
 apkg = types.ModuleType("argostranslate.package")
 apkg.get_installed_packages = lambda: [_Pkg(f, t) for f, t in DIRECT]
-apkg.update_package_index = lambda: (_ for _ in ()).throw(RuntimeError("offline"))
+# index reachable but empty: an unknown language is a DEFINITIVE miss
+# (blacklisted), not a transient network failure
+apkg.update_package_index = lambda: None
 apkg.get_available_packages = lambda: []
 atrans = types.ModuleType("argostranslate.translate")
 atrans.translate = _fake_translate
@@ -185,6 +187,22 @@ utter(ln)
 time.sleep(0.6)
 check("no-pack failure is remembered", len(ln.captions) == n_caps)
 
+# caption lines are truncated for the strip
+ln.captions.append((time.time(), "es", "x" * 200))
+long_lines = ln.caption_lines(width=90)
+check("caption truncated", long_lines[-1].endswith("...")
+      and len(long_lines[-1]) <= 90)
+ln.captions.pop()
+
+# live device switch: cycle stops the old stream and opens a new one
+ln._input_names = lambda: ["Fake Cable Out", "Other Device"]
+n_streams = len(DummyStream.made)
+old_stream = ln.stream
+ln.cycle_device(+1)
+check("cycle switches device", state.listen_device == "Other Device")
+check("cycle reopens stream", ln.on and old_stream.closed
+      and len(DummyStream.made) == n_streams + 1)
+
 # stop + toggle persistence
 ln.stop()
 check("stop closes stream", not ln.on and DummyStream.made[-1].closed)
@@ -198,7 +216,7 @@ with state.lock:
     state.listen_speak, state.listen_pass = True, False
 other = State()
 other.restore(state.snapshot())
-check("persist listen_device", other.listen_device == "Fake Cable Out")
+check("persist listen_device", other.listen_device == "Other Device")
 check("persist listen_speak", other.listen_speak is True)
 check("persist listen_pass", other.listen_pass is False)
 

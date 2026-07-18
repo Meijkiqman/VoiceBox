@@ -227,7 +227,12 @@ class Menu:
                 adjust=lambda d: self._toggle_listen_speak()))
             self.items.append(MenuItem(
                 "Listen passthrough",
-                lambda: "ON" if s.listen_pass else "off",
+                # honest label: the persisted preference can be ON while the
+                # speaker stream failed to open (device busy/missing)
+                lambda: ("failed - see status"
+                         if s.listen_pass and listener.on
+                         and listener.out_stream is None
+                         else "ON" if s.listen_pass else "off"),
                 select=self._toggle_listen_pass,
                 adjust=lambda d: self._toggle_listen_pass()))
         if harvester is not None:
@@ -682,6 +687,11 @@ def run_ui(state, stop_flag, dev_line, err_line="", monitor=None, board=None,
         "AI voice FX": "AI",
         "TTS voice FX": "TTS", "TTS volume": "TTS",
         "TTS voice": "TTS", "TTS rate": "TTS",
+        "Translate": "TRANSLATOR", "Translate to": "TRANSLATOR",
+        "Translate from": "TRANSLATOR", "Translate voice": "TRANSLATOR",
+        "Incoming speech": "INCOMING", "Listen device": "INCOMING",
+        "Speak incoming": "INCOMING", "Listen passthrough": "INCOMING",
+        "Voice harvest": "MY VOICE", "Retrain AI voice": "MY VOICE",
         "Sounds to mic": "SOUNDS", "Pause sounds": "SOUNDS",
         "Stop all sounds": "SOUNDS", "Rescan sounds": "SOUNDS",
         "Record output": "SYSTEM", "Global hotkeys": "SYSTEM",
@@ -747,6 +757,8 @@ def run_ui(state, stop_flag, dev_line, err_line="", monitor=None, board=None,
     slider_hit, slider_track, value_hit = {}, {}, {}   # numeric rows, per draw
     slider_drag = None            # row index while a slider knob is dragged
     edit = None                   # {"row": i, "text": str} while typing a value
+    cap_cache = {"key": None, "surf": None}   # caption strip, re-rendered on change
+    cap_hit = None                # caption strip rect from the last draw
     last_t = time.time()
 
     def step(cur, target, dt, dur):
@@ -1351,6 +1363,8 @@ def run_ui(state, stop_flag, dev_line, err_line="", monitor=None, board=None,
                         menu.on_up() if event.y > 0 else menu.on_down()
 
             elif event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
+                if cap_hit is not None and cap_hit.collidepoint(event.pos):
+                    continue           # caption strip covers rows: swallow
                 in_r = tts_btn_hit.get("input")
                 tts_set_focus(in_r is not None and in_r.collidepoint(event.pos))
                 if edit is not None and not value_hit.get(
@@ -1994,25 +2008,31 @@ def run_ui(state, stop_flag, dev_line, err_line="", monitor=None, board=None,
                 screen.blit(chip, (WIN_W - 14 - cw, fy - 10 + rise))
 
         # --------------------------------------- incoming-speech caption strip
+        cap_hit = None
         if listener is not None:
             cap_lines = listener.caption_lines(now)
             if cap_lines:
-                ch = f_foot.get_height() + 6
-                panel_h = 10 + ch * len(cap_lines)
-                cap = pygame.Surface((WIN_W, panel_h), pygame.SRCALPHA)
-                cap.fill((10, 13, 18, 216))
-                cy = 5
-                for ln in cap_lines:
-                    tag, _, rest = ln.partition("]")
-                    ts = T(f_foot, tag + "]", CLR["accent"])
-                    cap.blit(ts, (14, cy))
-                    cap.blit(T(f_foot, rest, CLR["text"]),
-                             (14 + ts.get_width(), cy))
-                    cy += ch
-                screen.blit(cap, (0, VIEW_BOT - panel_h))
+                key = (tuple(cap_lines), WIN_W)
+                if cap_cache["key"] != key:    # captions change rarely vs 60fps
+                    ch = f_foot.get_height() + 6
+                    panel_h = 10 + ch * len(cap_lines)
+                    cap = pygame.Surface((WIN_W, panel_h), pygame.SRCALPHA)
+                    cap.fill((10, 13, 18, 216))
+                    cy = 5
+                    for ln in cap_lines:
+                        tag, _, rest = ln.partition("]")
+                        ts = T(f_foot, tag + "]", CLR["accent"])
+                        cap.blit(ts, (14, cy))
+                        cap.blit(T(f_foot, rest, CLR["text"]),
+                                 (14 + ts.get_width(), cy))
+                        cy += ch
+                    cap_cache["key"], cap_cache["surf"] = key, cap
+                cap = cap_cache["surf"]
+                cap_hit = pygame.Rect(0, VIEW_BOT - cap.get_height(),
+                                      WIN_W, cap.get_height())
+                screen.blit(cap, cap_hit.topleft)
                 pygame.draw.line(screen, CLR["strokeSoft"],
-                                 (0, VIEW_BOT - panel_h),
-                                 (WIN_W, VIEW_BOT - panel_h))
+                                 cap_hit.topleft, cap_hit.topright)
 
         # --------------------------------------------- dropdown picker overlay
         if drop is not None:

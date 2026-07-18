@@ -8,7 +8,8 @@ translator (and TTS) come out of the cable sounding like *you*.
 
 1. **Voice harvest** (menu row) - leave it ON while you use VoiceBox.
    Every time you speak, the raw mic signal (before any effects) is
-   segmented into clips. Clips that are too short, too quiet or distorted
+   segmented into clips. While the mic is muted (including push-to-talk
+   idle) nothing is collected - off-air speech stays off the record. Clips that are too short, too quiet or distorted
    are thrown away; the rest are normalized and saved to
    `rvc/dataset_self/` as 48 kHz mono wavs. The row shows how many minutes
    you have.
@@ -43,14 +44,15 @@ pretrained_v2/f0G40k.pth       (base models training starts from)
 pretrained_v2/f0D40k.pth
 ```
 
-Check what's missing at any time with:
+Check what's missing at any time - from inside the `rvc/` folder (the
+trainer resolves everything relative to it):
 
 ```
-rvc\runtime\python.exe rvc_trainer.py --check --dataset rvc\dataset_self
+cd rvc
+runtime\python.exe ..\rvc_trainer.py --check --dataset dataset_self
 ```
 
-(run from the `rvc/` folder). The "Retrain AI voice" row runs the same
-script, so it will also tell you.
+The "Retrain AI voice" row runs the same script, so it will also tell you.
 
 ## Status: EXPERIMENTAL
 

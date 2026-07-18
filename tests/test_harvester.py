@@ -88,6 +88,19 @@ h.start()
 check("full dataset refuses start", not h.on and "retrain" in state.status_msg)
 check("full label", "full" in h.label())
 
+# crossing the cap mid-session stops collection and clears the persisted flag
+h2dir = Path(tempfile.mkdtemp())
+h2 = Harvester(state, out_dir=h2dir)
+h2.seconds = HARVEST_CAP_MIN * 60 - 3
+h2.start()
+with state.lock:
+    state.harvest_on = True
+feed(state, speech(4.0))
+feed(state, silence(1.0))
+check("cap auto-stops harvesting",
+      wait_for(lambda: not h2.on and state.harvest_on is False))
+check("cap clip still saved", len(list(h2dir.glob("*.wav"))) == 1)
+
 # harvest_on is in the settings snapshot
 with state.lock:
     state.harvest_on = True

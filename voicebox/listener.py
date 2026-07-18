@@ -126,7 +126,9 @@ class Listener:
             self._report(f"incoming: device '{name[:40]}' not found")
             return
         self._q = queue.Queue(maxsize=256)
-        self._jobs = queue.Queue()
+        # bounded: if translation falls behind live chat, drop utterances
+        # instead of captioning minutes-stale lines forever
+        self._jobs = queue.Queue(maxsize=8)
         self._stop = threading.Event()
         try:
             self.stream = self.stream_cls(
@@ -140,8 +142,13 @@ class Listener:
             return
         self.device_name = name
         self.error = ""
-        threading.Thread(target=self._segmenter, daemon=True).start()
-        threading.Thread(target=self._worker, daemon=True).start()
+        # queues/stop passed as args, never re-read from self: a stop() +
+        # start() (device switch) must not let an old thread adopt the new
+        # session's queues
+        threading.Thread(target=self._segmenter, daemon=True,
+                         args=(self._stop, self._q, self._jobs)).start()
+        threading.Thread(target=self._worker, daemon=True,
+                         args=(self._stop, self._jobs)).start()
         if self.state.listen_pass:
             self._open_passthrough()
         self._report(f"incoming: listening on {name[:40]}")
@@ -156,7 +163,10 @@ class Listener:
             except queue.Full:
                 pass
         if self._jobs is not None:
-            self._jobs.put(None)             # wake the worker
+            try:
+                self._jobs.put_nowait(None)  # wake the worker
+            except queue.Full:
+                pass                         # it wakes on its own timeout
         if self.stream is not None:
             try:
                 self.stream.close()
@@ -225,11 +235,10 @@ class Listener:
 
     # ---- segmentation (same shape as the harvester's) ----
 
-    def _segmenter(self):
+    def _segmenter(self, stop, q, jobs):
         thresh = 10.0 ** (LISTEN_THRESH_DB / 20.0)
         pre_max = int(LISTEN_PRE_S * SAMPLERATE)
         pre, pre_len, seg, quiet = [], 0, None, 0.0
-        stop, q, jobs = self._stop, self._q, self._jobs
         while not stop.is_set():
             try:
                 block = q.get(timeout=0.5)
@@ -256,12 +265,14 @@ class Listener:
                 utt = np.concatenate(seg)
                 pre, pre_len, seg, quiet = [], 0, None, 0.0
                 if len(utt) >= LISTEN_MIN_S * SAMPLERATE:
-                    jobs.put(utt)
+                    try:
+                        jobs.put_nowait(utt)
+                    except queue.Full:
+                        pass           # translation lagging: skip, stay live
 
     # ---- translation worker ----
 
-    def _worker(self):
-        stop, jobs = self._stop, self._jobs
+    def _worker(self, stop, jobs):
         while not stop.is_set():
             try:
                 utt = jobs.get(timeout=0.5)
@@ -289,7 +300,9 @@ class Listener:
     def caption_lines(self, now=None, width=90):
         """Recent captions for the UI strip, oldest first."""
         now = now if now is not None else time.time()
-        lines = [f"[{lang}]  {text}" for t, lang, text in self.captions
+        # list() first: the worker thread appends concurrently, and a deque
+        # raises RuntimeError if it grows mid-iteration (the copy is atomic)
+        lines = [f"[{lang}]  {text}" for t, lang, text in list(self.captions)
                  if now - t < LISTEN_CAPTION_S]
         return [ln if len(ln) <= width else ln[:width - 3] + "..."
                 for ln in lines[-LISTEN_CAPTION_N:]]

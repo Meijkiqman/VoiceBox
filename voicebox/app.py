@@ -43,6 +43,7 @@ def main():
     scenes = Scenes(state, ai, tts)
     translator = Translator(state, player=player, monitor=monitor, ai=ai,
                             voices_fn=lambda: tts.voice_names)
+    translator.warm()             # preload models if the deps are installed
     harvester = Harvester(state)
     if state.harvest_on:               # persisted toggle: resume collecting
         harvester.start()

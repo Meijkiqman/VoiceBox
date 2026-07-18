@@ -26,6 +26,7 @@ The finished model lands in weights/<name>*.pth (newest = best) and the
 matching .index in logs/<name>/ - exactly where VoiceBox looks for AI
 voices, so it shows up in the AI character row on next launch."""
 import argparse
+import json
 import os
 import random
 import shutil
@@ -45,15 +46,25 @@ def newest(pattern):
     return files[-1] if files else None
 
 
-def check_requirements(version):
+def expect_output(folder, step):
+    """Each pipeline stage must leave files behind; the RVC scripts often
+    print per-file tracebacks but still exit 0, so trust the output, not
+    the exit code."""
+    folder = Path(folder)
+    if not folder.is_dir() or not any(folder.iterdir()):
+        sys.exit(f"{step} produced nothing in {folder} - scroll up for its "
+                 "errors (bad wavs? missing model files?)")
+
+
+def check_requirements(version, sr="40k"):
     pre = "pretrained_v2" if version == "v2" else "pretrained"
     needed = [
         "trainset_preprocess_pipeline_print.py",
         "extract_feature_print.py",
         "train_nsf_sim_cache_sid_load_pretrain.py",
         "hubert_base.pt",
-        f"{pre}/f0G40k.pth",
-        f"{pre}/f0D40k.pth",
+        f"{pre}/f0G{sr}.pth",
+        f"{pre}/f0D{sr}.pth",
         "logs/mute",
         "configs",
     ]
@@ -87,7 +98,7 @@ def main():
                     help="only verify the training pieces exist")
     args = ap.parse_args()
 
-    if not check_requirements(args.version):
+    if not check_requirements(args.version, args.sr):
         sys.exit(1)
     if args.check:
         return
@@ -112,26 +123,46 @@ def main():
     except Exception:
         gpu = False
     if not gpu:
-        print("WARNING: no CUDA GPU visible - training will be very slow.")
-    device = "cuda:0" if gpu else "cpu"
+        # the beta0717 trainer is GPU-only in practice; refusing beats a
+        # "run" that burns hours and produces nothing
+        sys.exit("no CUDA GPU visible - RVC training needs an NVIDIA GPU. "
+                 "If you have one, check the RVC runtime's torch install.")
+    device = "cuda:0"
+    feat = "3_feature768" if args.version == "v2" else "3_feature256"
+
+    # dataset fingerprint: a changed dataset invalidates the preprocessed
+    # artifacts (a removed wav would otherwise linger in the filelist via
+    # stale features from an earlier run)
+    fp_file = exp / "dataset.json"
+    fingerprint = json.dumps(sorted(
+        (f.name, f.stat().st_size) for f in wavs))
+    old = fp_file.read_text() if fp_file.is_file() else ""
+    if old and old != fingerprint:
+        print("dataset changed since the last run - redoing preprocessing")
+        for d in ("0_gt_wavs", "1_16k_wavs", "2a_f0", "2b-f0nsf",
+                  "3_feature256", "3_feature768"):
+            shutil.rmtree(exp / d, ignore_errors=True)
+    fp_file.write_text(fingerprint)
 
     py = sys.executable
 
     # 1) preprocess: slice/normalize the dataset into 0_gt_wavs + 1_16k_wavs
     sh([py, "trainset_preprocess_pipeline_print.py", dataset, sr_int, n_cpu,
         exp, "False"])
+    expect_output(exp / "0_gt_wavs", "preprocess")
 
-    # 2) pitch extraction (rmvpe when the script for it exists, else harvest)
-    if Path("extract_f0_rmvpe.py").is_file():
-        sh([py, "extract_f0_rmvpe.py", 1, 0, 0, exp, "True" if gpu else "False"])
+    # 2) pitch extraction (rmvpe only when both its script and model exist)
+    if Path("extract_f0_rmvpe.py").is_file() and Path("rmvpe.pt").is_file():
+        sh([py, "extract_f0_rmvpe.py", 1, 0, 0, exp, "True"])
     else:
         sh([py, "extract_f0_print.py", exp, n_cpu, "harvest"])
+    expect_output(exp / "2a_f0", "pitch extraction")
 
     # 3) HuBERT features
     sh([py, "extract_feature_print.py", device, 1, 0, 0, exp, args.version])
+    expect_output(exp / feat, "feature extraction")
 
     # 4) filelist + config, mirroring the WebUI's click_train()
-    feat = "3_feature768" if args.version == "v2" else "3_feature256"
     names = ({f.stem for f in (exp / "0_gt_wavs").glob("*.wav")}
              & {f.stem for f in (exp / feat).glob("*.npy")}
              & {f.name[:-len(".wav.npy")] for f in (exp / "2a_f0").glob("*.wav.npy")}
@@ -165,7 +196,7 @@ def main():
     pre = "pretrained_v2" if args.version == "v2" else "pretrained"
     sh([py, "train_nsf_sim_cache_sid_load_pretrain.py",
         "-e", args.name, "-sr", args.sr, "-f0", 1, "-bs", args.batch,
-        "-g", 0 if gpu else "", "-te", args.epochs, "-se", args.save_every,
+        "-g", 0, "-te", args.epochs, "-se", args.save_every,
         "-pg", f"{pre}/f0G{args.sr}.pth", "-pd", f"{pre}/f0D{args.sr}.pth",
         "-l", 1, "-c", 0, "-sw", 1, "-v", args.version])
 
