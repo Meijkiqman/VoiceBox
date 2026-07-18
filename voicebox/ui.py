@@ -671,7 +671,7 @@ def run_ui(state, stop_flag, dev_line, err_line="", monitor=None, board=None,
         return surf
 
     # ----------------------------------------------------- layout (tokens JSON)
-    HEADER_H, FOOTER_H, SCENE_H = 52, 32, 40
+    HEADER_H, FOOTER_H, SCENE_H, SYS_H = 52, 32, 40, 40
     PAGE_PAD = COL_GAP = CARD_GAP = 12
     CARD_W, SB_W = 296, 320
     CARD_HDR, PAD_X, PAD_TOP, PAD_BOT = 32, 8, 6, 8
@@ -681,7 +681,9 @@ def run_ui(state, stop_flag, dev_line, err_line="", monitor=None, board=None,
     TTS_IN_H, TTS_LIST_H = 30, 100
     TTS_ROW_H, TTS_ROW_GAP = 30, 2
 
-    CARD_TOP = HEADER_H + SCENE_H
+    SYS_TOP = HEADER_H                 # system bar sits right under the header
+    SCENE_TOP = SYS_TOP + SYS_H
+    CARD_TOP = SCENE_TOP + SCENE_H
     WIN_W = WIN_H = VIEW_BOT = 0
     SB_X = 0
     sb_rect = sb_grid_rect = tts_list_rect = None
@@ -734,19 +736,36 @@ def run_ui(state, stop_flag, dev_line, err_line="", monitor=None, board=None,
              dot=(lambda: listener.on) if listener else None,
              dim=(lambda: not listener.on) if listener else None,
              show=listener is not None),
-        card("system", "SYSTEM",
-             _rows("Input device", "Output device", "Record output",
-                   "HEAR self-listen", "Global hotkeys", "Sound cues",
-                   "Rescan sounds", "Quit"),
-             summary=(lambda: "HOTKEYS ON" if hotkeys is not None
-                      and hotkeys.on else "HOTKEYS OFF")),
     ]
+    # SYSTEM is not a card: it is the chip bar under the header (the old
+    # always-visible toggle buttons), drawn from these menu rows in order
+    SYSTEM_BAR = [
+        ("HEAR self-listen", "HEAR",
+         (lambda: monitor.on) if monitor is not None else None),
+        ("Auto translate", "TRANS",
+         (lambda: translator.auto) if translator is not None else None),
+        ("Record output", "REC",
+         (lambda: recorder.on) if recorder is not None else None),
+        ("Global hotkeys", "KEYS",
+         (lambda: hotkeys.on) if hotkeys is not None else None),
+        ("Sound cues", "CUES", lambda: state.cues_on),
+        ("Input device", "IN", None),
+        ("Output device", "OUT", None),
+        ("Rescan sounds", "RESCAN", None),
+        ("Quit", "QUIT", None),
+    ]
+    SYSTEM_BAR = [(idx_of[lab], lab, chip, act) for lab, chip, act in
+                  SYSTEM_BAR if lab in idx_of]
     cards = [c for c in CARD_DEFS if c["show"] and c["rows"]]
     card_of_row = {i: c["key"] for c in cards for i in c["rows"]}
     collapsed = state.cards_collapsed        # persisted set of card keys
     SCENE_IDX = idx_of.get("Scene")
     SAVE_SCENE_IDX = idx_of.get("Save scene")
     CLIP_VOL_IDX = idx_of.get("Clip volume")
+    # bar chips that are ALSO a card row (TRANS) stay chip-click-only; the
+    # rest join row_hit/focus like any row and must survive the frame clear
+    SYS_SOLO = [e for e in SYSTEM_BAR if e[0] not in card_of_row]
+    KEEP_ROWS = {SCENE_IDX, SAVE_SCENE_IDX} | {e[0] for e in SYS_SOLO}
 
     def card_h(c):
         if c["key"] in collapsed:
@@ -786,6 +805,8 @@ def run_ui(state, stop_flag, dev_line, err_line="", monitor=None, board=None,
             stop_of[stop] = len(focus_stops)
             stop_y[len(focus_stops)] = y
             focus_stops.append(stop)
+        for i, _lab, _chip, _act in SYS_SOLO:
+            add(("row", i), -1)              # system bar: never scrolled
         if SCENE_IDX is not None:
             add(("row", SCENE_IDX), -1)      # scene strip: never scrolled
         if SAVE_SCENE_IDX is not None:
@@ -896,6 +917,7 @@ def run_ui(state, stop_flag, dev_line, err_line="", monitor=None, board=None,
     meter_lit = 0.0
     peak_lit, peak_at = 0.0, 0.0
     row_hit, hdr_hit, strip_hit, grid_hit, scene_hit = {}, {}, {}, {}, {}
+    sys_hit = {}                  # system-bar chips, by menu item index
     tts_row_hit, tts_del_hit, tts_btn_hit = {}, {}, {}
     arrow_hit = None
     slider_hit, slider_track, value_hit = {}, {}, {}
@@ -909,7 +931,8 @@ def run_ui(state, stop_flag, dev_line, err_line="", monitor=None, board=None,
                     tts_row_hit=tts_row_hit, tts_del_hit=tts_del_hit,
                     tts_btn_hit=tts_btn_hit, slider_track=slider_track,
                     value_hit=value_hit,
-                    labels=[it.label for it in menu.items], drop_info=None)
+                    labels=[it.label for it in menu.items], drop_info=None,
+                    sys_hit=sys_hit)
 
     def step(cur, target, dt, dur):
         if dur <= 0:
@@ -1540,6 +1563,8 @@ def run_ui(state, stop_flag, dev_line, err_line="", monitor=None, board=None,
             menu.on_select()
 
     relayout()
+    if SCENE_IDX is not None:      # first focus: the scene chip, like before
+        fsel = stop_of.get(("row", SCENE_IDX), 0)
 
     # test hook: events appended here are handled on the MAIN thread each
     # frame. The headless suites use this instead of pygame.event.post -
@@ -1711,6 +1736,14 @@ def run_ui(state, stop_flag, dev_line, err_line="", monitor=None, board=None,
                     board.stop()
                 elif hit == "page":
                     flip_page(+1)
+                elif (sy := next((k for k, r in sys_hit.items()
+                                  if r.collidepoint(event.pos)), None)) is not None:
+                    strip_press[("sys", sy)] = now
+                    menu.sel = sy
+                    st_ = stop_of.get(("row", sy))
+                    if st_ is not None:
+                        fsel = st_
+                    menu.on_select()
                 elif (hk := next((k for k, r in hdr_hit.items()
                                   if r.collidepoint(event.pos)), None)) is not None:
                     if ("hdr", hk) in stop_of:
@@ -1837,13 +1870,87 @@ def run_ui(state, stop_flag, dev_line, err_line="", monitor=None, board=None,
         screen.blit(mic_s, (seg_x0 - 10 - mic_s.get_width(),
                             (HEADER_H - mic_s.get_height()) // 2))
 
+        # ------------------------------------------- system bar (chip toggles)
+        sys_hit.clear()
+        pygame.draw.rect(screen, CLR["headerBot"],
+                         pygame.Rect(0, SYS_TOP, WIN_W, SYS_H))
+        pygame.draw.line(screen, CLR["strokeSoft"], (0, SYS_TOP + SYS_H - 1),
+                         (WIN_W, SYS_TOP + SYS_H - 1))
+        sy_c = SYS_TOP + SYS_H // 2
+        sx = PAGE_PAD
+        st = focus_stop()
+        for i, lab, chip, act_fn in SYSTEM_BAR:
+            it = menu.items[i]
+            danger = chip in ("REC", "QUIT")
+            active = False
+            if act_fn is not None:
+                try:
+                    active = bool(act_fn())
+                except Exception:
+                    pass
+            if chip == "REC" and recorder is not None and recorder.on:
+                text = menu._rec_label()               # live REC m:ss
+            elif chip == "IN" and engine is not None:
+                text = "IN: " + engine.short_name("input", 12)
+            elif chip == "OUT" and engine is not None:
+                text = "OUT: " + engine.short_name("output", 12)
+            elif act_fn is not None:
+                text = f"{chip}: {'ON' if active else 'OFF'}"
+            else:
+                text = chip
+            acol = CLR["danger"] if danger and active else \
+                (CLR["danger"] if chip == "QUIT" else CLR["accent"])
+            tint = DANGER_TINT if danger else ACCENT_TINT
+            ts0 = T(f_strip, text, acol if active else CLR["muted"])
+            w = ts0.get_width() + 18 + (10 if active else 0)
+            if chip == "QUIT":                         # pinned to the right
+                r = pygame.Rect(WIN_W - PAGE_PAD - w, sy_c - 13, w, 26)
+            else:
+                r = pygame.Rect(sx, sy_c - 13, w, 26)
+            hm = q8(hover_step(("sys", i), r.collidepoint(mouse_pos), dt))
+            pm = max(0.0, 1.0 - (now - strip_press.get(("sys", i), 0)) / 0.08) \
+                if strip_press.get(("sys", i)) else 0.0
+            if active:
+                screen.blit(grad(w, 26, tint[0], tint[1], 6), r.topleft)
+                pygame.draw.rect(screen, mixc(CLR["bg"], acol, 0.45), r,
+                                 width=1, border_radius=6)
+            else:
+                top = mixc(CLR["raisedTop"], CLR["hoverTop"], hm)
+                bot = mixc(CLR["raisedBot"], CLR["hoverBot"], hm)
+                if pm > 0:
+                    top = mixc(top, CLR["active"], q8(pm))
+                    bot = mixc(bot, CLR["active"], q8(pm))
+                screen.blit(grad(w, 26, top, bot, 6), r.topleft)
+                pygame.draw.rect(screen,
+                                 mixc(CLR["stroke"], CLR["strokeHover"], hm),
+                                 r, width=1, border_radius=6)
+            if st == ("row", i):                       # keyboard focus ring
+                screen.blit(glow(w, 26, CLR["accent"], 6),
+                            (r.x - G_PAD, r.y - G_PAD))
+                pygame.draw.rect(screen, CLR["accent"], r, width=1,
+                                 border_radius=6)
+            tx = r.x + 9
+            if active:
+                pygame.draw.circle(screen, acol, (tx + 2, r.centery), 2)
+                tx += 10
+            ts = T(f_strip, text, acol if active else
+                   (CLR["text"] if hm > 0.5 or st == ("row", i)
+                    else CLR["muted"]))
+            screen.blit(ts, (tx, r.centery - ts.get_height() // 2))
+            sys_hit[i] = r
+            if i in KEEP_ROWS:
+                row_hit[i] = r                         # hover/nav like a row
+            if chip != "QUIT":
+                sx = r.right + 6
+
         # -------------------------------------------------------- scene strip
         scene_hit.clear()
         pygame.draw.rect(screen, CLR["paneLeft"],
-                         pygame.Rect(0, HEADER_H, WIN_W, SCENE_H))
-        pygame.draw.line(screen, CLR["strokeSoft"], (0, HEADER_H + SCENE_H - 1),
-                         (WIN_W, HEADER_H + SCENE_H - 1))
-        scy = HEADER_H + SCENE_H // 2
+                         pygame.Rect(0, SCENE_TOP, WIN_W, SCENE_H))
+        pygame.draw.line(screen, CLR["strokeSoft"],
+                         (0, SCENE_TOP + SCENE_H - 1),
+                         (WIN_W, SCENE_TOP + SCENE_H - 1))
+        scy = SCENE_TOP + SCENE_H // 2
         hs = TT(f_hdr, "SCENES", CLR["faint"], 2)
         screen.blit(hs, (PAGE_PAD + 4, scy - hs.get_height() // 2))
         sx = PAGE_PAD + 4 + hs.get_width() + 12
@@ -1921,7 +2028,7 @@ def run_ui(state, stop_flag, dev_line, err_line="", monitor=None, board=None,
         for d_ in (row_hit, hdr_hit, slider_hit, slider_track, value_hit,
                    tts_btn_hit, tts_row_hit, tts_del_hit):
             keep_scene = {k: v for k, v in d_.items()
-                          if d_ is row_hit and k in (SCENE_IDX, SAVE_SCENE_IDX)}
+                          if d_ is row_hit and k in KEEP_ROWS}
             d_.clear()
             d_.update(keep_scene)
         arrow_hit = None

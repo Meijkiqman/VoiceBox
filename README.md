@@ -22,10 +22,11 @@ Or by hand: `pip install -r requirements.txt`, then `python voicebox.py`.
 ## Features
 
 - **Dashboard UI** - one self-contained card per feature (Translator,
-  AI voice, My voice, Voice FX, TTS, Incoming, System) with its own
-  settings and volume, plus the soundboard pinned on the right; cards
-  collapse to their header (click it or press Enter, TAB cycles cards)
-  and more window width means more columns.
+  AI voice, My voice, Voice FX, TTS, Incoming) with its own settings
+  and volume, the soundboard pinned on the right, and a system bar of
+  quick toggles under the header (HEAR / TRANS / REC / hotkeys / cues /
+  devices / quit). Cards collapse to their header (click it or press
+  Enter, TAB cycles cards) and more window width means more columns.
 - **Scenes** - the whole persona (effects, AI character, TTS voice) in one
   press or Ctrl+Alt+S from the strip under the header; rename/delete right
   in the dropdown.
