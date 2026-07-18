@@ -9,6 +9,11 @@ USER_PRESETS_PATH = BASE_DIR / "user_presets.json"  # "Save preset" snapshots
 SCENES_PATH   = BASE_DIR / "scenes.json"         # "Save scene" full-setup snapshots
 RECORDINGS_DIR = BASE_DIR / "recordings"         # "Record output" wav files
 
+# Optional neural TTS (Piper): run setup/Get-PiperVoices.bat to install the
+# engine + a realistic male/female English pair into this folder. Voices in
+# piper/voices/*.onnx appear in every voice picker as "Piper: ...".
+PIPER_DIR = BASE_DIR / "piper"
+
 TTS_PHRASES_PATH = BASE_DIR / "tts_phrases.json"  # saved TTS phrases
 TTS_CACHE_DIR    = BASE_DIR / "tts_cache"         # rendered wavs, keyed by text hash
 TTS_MAX_CHARS    = 200                            # per-phrase length cap

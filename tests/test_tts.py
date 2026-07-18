@@ -349,6 +349,58 @@ check("voice picker UI survives", not ui_error,
 check(">3 options pick from a dropdown", ui_state2.tts_voice == "Beta",
       str(ui_state2.tts_voice))
 
+# ------------------------------------------------------- Piper integration
+piper_tmp = Path(tempfile.mkdtemp()) / "piper"
+(piper_tmp / "voices").mkdir(parents=True)
+(piper_tmp / "piper").write_bytes(b"")           # engine stand-in
+(piper_tmp / "voices" / "en_US-ryan-high.onnx").write_bytes(b"x")
+(piper_tmp / "voices" / "en_US-lessac-high.onnx").write_bytes(b"x")
+old_piper_dir = voicebox.tts.PIPER_DIR
+voicebox.tts.PIPER_DIR = piper_tmp
+
+vm = voicebox.tts.piper_voice_map()
+check("piper voices discovered",
+      list(vm) == ["Piper: Lessac (en_US, high)", "Piper: Ryan (en_US, high)"],
+      str(list(vm)))
+
+piper_calls = []
+
+
+def fake_piper_run(cmd, **kw):
+    piper_calls.append((cmd, kw))
+    import soundfile as _sf
+    _sf.write(cmd[cmd.index("--output_file") + 1],
+              np.full(2205, 0.2, np.float32), 22050, subtype="PCM_16")
+    class R:
+        returncode = 0
+        stdout = stderr = ""
+    return R()
+
+
+old_run = voicebox.tts._piper_run
+voicebox.tts._piper_run = fake_piper_run
+try:
+    wavp = Path(tempfile.mkdtemp()) / "piper_out.wav"
+    voicebox.tts.synth_tts_wav("hello there", wavp,
+                               voice="Piper: Ryan (en_US, high)", rate=10)
+    cmd, kw = piper_calls[-1]
+    check("piper synth routed to the engine",
+          cmd[cmd.index("--model") + 1].endswith("en_US-ryan-high.onnx"))
+    check("piper text over stdin", kw.get("input") == "hello there")
+    check("piper rate maps to length_scale",
+          cmd[cmd.index("--length_scale") + 1] == "0.500")
+    check("piper wav written", wavp.is_file())
+    try:
+        voicebox.tts._synth_piper("x", wavp, "Piper: Gone", 0)
+        check("unknown piper voice fails cleanly", False)
+    except RuntimeError as e:
+        check("unknown piper voice fails cleanly", "not installed" in str(e))
+finally:
+    voicebox.tts._piper_run = old_run
+    voicebox.tts.PIPER_DIR = old_piper_dir
+check("no piper folder -> no piper voices",
+      voicebox.tts.piper_voice_map() == {})
+
 # ---------------------------------------------------------- voice + rate
 p1 = voicebox.tts_cache_path("hello")
 check("cache path is stable", p1 == voicebox.tts_cache_path("hello"))

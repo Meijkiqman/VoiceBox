@@ -33,9 +33,9 @@ ARGOS_PAIRS = [("nb", "en"), ("en", "es"), ("en", "zh")]
 # auto-picking when the user hasn't chosen one ("Microsoft Pablo - Spanish
 # (Spain)", "Microsoft Huihui - Chinese (Simplified, PRC)", ...).
 VOICE_HINTS = {
-    "en": ("english",),
-    "es": ("spanish", "español", "espanol"),
-    "zh": ("chinese", "mandarin", "taiwanese"),
+    "en": ("english", "en_us", "en_gb"),
+    "es": ("spanish", "español", "espanol", "es_es", "es_mx"),
+    "zh": ("chinese", "mandarin", "taiwanese", "zh_cn"),
 }
 
 

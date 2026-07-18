@@ -12,8 +12,54 @@ import numpy as np
 import soundfile as sf
 from scipy.signal import resample_poly
 
-from .config import (SAMPLERATE, TTS_CACHE_DIR, TTS_MAX_CHARS,
+from .config import (PIPER_DIR, SAMPLERATE, TTS_CACHE_DIR, TTS_MAX_CHARS,
                      TTS_PHRASES_PATH)
+
+# ---------------------------------------------------------------- Piper
+# Optional neural voices: a piper/ folder (engine + voices/*.onnx) makes
+# far more realistic speech than the OS engines, fully offline. Installed
+# by setup/Get-PiperVoices.bat; absent = everything below returns empty.
+_piper_run = subprocess.run          # indirection point for the tests
+
+
+def _piper_exe():
+    for name in ("piper.exe", "piper"):
+        p = Path(PIPER_DIR) / name
+        if p.is_file():
+            return p
+    return None
+
+
+def piper_voice_map():
+    """{display name: onnx path} for the installed Piper voices. The stem
+    en_US-ryan-high becomes "Piper: Ryan (en_US, high)"."""
+    if _piper_exe() is None:
+        return {}
+    out = {}
+    for f in sorted(Path(PIPER_DIR, "voices").glob("*.onnx")):
+        parts = f.stem.split("-")
+        disp = (f"Piper: {parts[1].title()} ({parts[0]}, {parts[2]})"
+                if len(parts) >= 3 else f"Piper: {f.stem}")
+        out[disp] = f
+    return out
+
+
+def _synth_piper(text, wav_path, voice, rate):
+    """Render with the Piper engine (blocking). rate reuses the SAPI -10..10
+    scale: each 10 steps doubles/halves the pace via length_scale."""
+    onnx = piper_voice_map().get(voice)
+    exe = _piper_exe()
+    if onnx is None or exe is None:
+        raise RuntimeError(f"Piper voice not installed: {voice[:40]}")
+    ls = 2.0 ** (-float(max(-10, min(10, rate))) / 10.0)
+    cmd = [str(exe), "--model", str(onnx), "--output_file", str(wav_path),
+           "--length_scale", f"{ls:.3f}"]
+    r = _piper_run(cmd, input=text, text=True, capture_output=True,
+                   timeout=120, cwd=str(exe.parent),
+                   creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+    if r.returncode != 0 or not Path(wav_path).is_file():
+        detail = (r.stderr or r.stdout or "").strip().splitlines()
+        raise RuntimeError(detail[-1][:80] if detail else "piper failed")
 
 def winrt_speaking_rate(rate):
     """SAPI -10..10 speaking rate -> the WinRT SpeechSynthesizer scale
@@ -88,6 +134,8 @@ def synth_tts_wav(text, wav_path, voice=None, rate=0):
     `voice` is a name (None = engine default); `rate` is the SAPI -10..10
     scale, mapped to words/minute for say/espeak. The text travels over
     stdin so no shell-quoting issue can arise."""
+    if voice and str(voice).startswith("Piper: "):
+        return _synth_piper(text, wav_path, str(voice), rate)
     rate = int(max(-10, min(10, rate)))
     wpm = int(175 * 2.0 ** (rate / 10.0))      # say/espeak equivalent
     if sys.platform == "win32":
@@ -144,9 +192,14 @@ def _dedup(names):
 
 
 def list_tts_voices():
-    """Installed TTS voice names, for the "TTS voice" menu row (blocking;
-    runs on a background thread). On Windows this spans both the classic
-    SAPI5 voices and the modern OneCore/natural voices. Empty on failure."""
+    """Installed TTS voice names, for the voice pickers (blocking; runs on
+    a background thread). Piper neural voices first (they're the realistic
+    ones), then the OS engines: Windows spans both classic SAPI5 and the
+    OneCore voices. Empty on failure."""
+    return list(piper_voice_map()) + _list_os_voices()
+
+
+def _list_os_voices():
     kw = dict(text=True, capture_output=True, timeout=20,
               creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
     try:
