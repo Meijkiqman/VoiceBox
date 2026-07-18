@@ -33,11 +33,13 @@ Or by hand: `pip install -r requirements.txt`, then `python voicebox.py`.
   the effect chain.
 - **Text to speech** - typed phrases speak into the mic, through the
   effects or the AI voice, with any installed OS voice.
-- **Speech translator** - tap Ctrl+Alt+T and speak Norwegian or English;
-  when you stop talking it sends itself: transcribed, translated (English,
+- **Speech translator** - flip the TRANS chip (next to HEAR) and just
+  talk: each sentence you say is transcribed, translated (English,
   Spanish or Mandarin) and spoken into the mic in a native TTS voice - or
-  in *your* RVC voice while the AI voice is live. Offline after first-run
-  downloads; needs `pip install -r requirements-translator.txt`.
+  in *your* RVC voice while the AI voice is live - while your raw voice
+  stays off the cable. Ctrl+Alt+T does a one-shot capture instead.
+  Offline after first-run downloads;
+  needs `pip install -r requirements-translator.txt`.
 - **Incoming translator** - captions non-English speech from the voice
   chat, in English, at the bottom of the window (optionally spoken
   aloud); English passes through uncaptioned. Route Discord's output to
@@ -63,11 +65,12 @@ runs without the AI voice.
 
 ## Speech translator
 
-`pip install -r requirements-translator.txt`, then tap Ctrl+Alt+T (or the
-Translate row) and just speak - about a second of silence sends it by
-itself; tapping again only cuts a capture short. While it listens your
-real voice is held back from the cable; a moment later the translation
-speaks into it.
+`pip install -r requirements-translator.txt`, then flip the **TRANS**
+chip in the strip next to HEAR and just talk: each sentence is detected
+by its trailing silence, translated, and spoken into the cable a moment
+later - your raw voice never goes out while TRANS is on. Prefer it
+per-sentence? Tap Ctrl+Alt+T (or the Translate row) for a one-shot
+capture that sends itself the same way.
 First use downloads the Whisper model and the Argos language packs (needs
 internet once; everything runs locally after that). "Translate voice"
 auto-picks an installed Windows voice for the target language - install

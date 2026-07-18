@@ -32,6 +32,7 @@ PERSIST_FIELDS = {
     "cues_on":      bool,
     "clips_to_mic": bool,
     "harvest_on":   bool,
+    "trans_auto":   bool,
     "listen_on":    bool,
     "listen_speak": bool,
     "listen_pass":  bool,
@@ -125,6 +126,7 @@ class State:
         self.trans_voice_zh = None
         self.trans_hold = False       # capturing: outgoing voice path silent
         self.trans_tap = None         # Queue while capturing (raw mic blocks)
+        self.trans_auto = False       # continuous translate (TRANS strip chip)
         self.harvest_on = False       # collect own-voice training clips
         self.harvest_q = None         # Queue while harvesting (raw mic blocks)
         self.listen_on = False        # incoming speech translator

@@ -1383,6 +1383,8 @@ def run_ui(state, stop_flag, dev_line, err_line="", monitor=None, board=None,
                     board.stop()
                 elif hit == "hear":
                     menu._toggle_monitor()
+                elif hit == "trans":
+                    translator.toggle_auto()
                 elif hit == "page":
                     flip_page(+1)
                 elif (r := tts_btn_hit.get("add")) is not None \
@@ -1613,6 +1615,10 @@ def run_ui(state, stop_flag, dev_line, err_line="", monitor=None, board=None,
             strip_defs.append(
                 ("hear", "HEAR: ON" if monitor.on else "HEAR: OFF",
                  monitor.on, CLR["accent"], ACCENT_TINT))
+        if translator is not None:         # continuous speech translation
+            strip_defs.append(
+                ("trans", "TRANS: ON" if translator.auto else "TRANS: OFF",
+                 translator.auto, CLR["accent"], ACCENT_TINT))
         n_pages = board.page_count()
         if n_pages > 1:                # hotkey page chip; click steps onward
             strip_defs.append(("page",

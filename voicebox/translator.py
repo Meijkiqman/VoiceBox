@@ -64,6 +64,7 @@ class Translator:
         self.monitor = monitor
         self.ai = ai
         self.capturing = False
+        self.auto = False            # continuous mode (the TRANS strip toggle)
         self.phase = ""              # "" | "loading models" | "transcribing" | ...
         self.error = ""              # sticky last failure, shown on the row
         self.last = ""               # last "heard -> said" line
@@ -138,6 +139,8 @@ class Translator:
 
     def row_label(self):
         """The Translate row's value text."""
+        if self.auto:
+            return "AUTO - just talk"
         if self.capturing:
             return "LISTENING - just speak"
         if self.phase:
@@ -149,20 +152,37 @@ class Translator:
     # ---- capture ----
 
     def toggle(self):
+        """One-shot tap (hotkey/row). In auto mode it means "send now"."""
         with self._lock:
             if self.capturing:
                 self._stop_capture()
             else:
                 self._start_capture()
 
+    def toggle_auto(self):
+        """Continuous mode (the TRANS strip chip): while on, every utterance
+        is captured, translated and spoken by itself - the cable carries
+        only translations, never the raw voice."""
+        with self._lock:
+            self.auto = not self.auto
+            with self.state.lock:
+                self.state.trans_auto = self.auto   # persisted
+            if self.auto and not self.capturing:
+                self._start_capture()
+            elif not self.auto and self.capturing:
+                self._stop_capture()   # translate whatever was mid-sentence
+        self._report("auto-translate ON - your voice goes out only as "
+                     f"{self.target_label()} translations" if self.auto
+                     else "auto-translate off")
+
     def _report(self, msg):
         self.state.status_msg = msg
         self.state.status_at = time.time()
 
     def _start_capture(self):
-        if self.phase:                 # still working on the last utterance
+        if self.phase and not self.auto:   # still working on the last one
             self._report("translator: busy - " + self.phase)
-            return
+            return                     # (auto mode keeps listening regardless)
         tap = queue.Queue(maxsize=int(TRANS_MAX_S * SAMPLERATE / BLOCKSIZE) + 64)
         with self.state.lock:
             self.state.trans_tap = tap
@@ -185,6 +205,7 @@ class Translator:
         again; TRANS_IDLE_S with no speech at all gives up. Exits quietly
         the moment a manual tap (or a newer capture) takes over."""
         thresh = 10.0 ** (TRANS_SPEECH_DB / 20.0)
+        pre_blocks = int(0.5 * SAMPLERATE / BLOCKSIZE)   # pre-roll kept in auto
         t0 = time.time()
         heard = False
         quiet_since = None
@@ -201,8 +222,20 @@ class Translator:
                     if now - quiet_since >= TRANS_AUTO_STOP_S:
                         self._stop_capture()
                         return
-                if now - t0 >= TRANS_MAX_S or (not heard
-                                               and now - t0 >= TRANS_IDLE_S):
+                elif self.auto:
+                    # continuous mode idles for free: silence never gives up,
+                    # and the tap keeps only a short pre-roll so a long lull
+                    # can't fill the queue and swallow the next sentence
+                    t0 = now
+                    while tap.qsize() > pre_blocks:
+                        try:
+                            tap.get_nowait()
+                        except queue.Empty:
+                            break
+                elif now - t0 >= TRANS_IDLE_S:
+                    self._stop_capture()   # one-shot tap, nothing said
+                    return
+                if now - t0 >= TRANS_MAX_S:
                     self._stop_capture()
                     return
 
@@ -222,10 +255,13 @@ class Translator:
                  else np.zeros(0, dtype=np.float32))
         audio = audio[: int(TRANS_MAX_S * SAMPLERATE)]
         if len(audio) < TRANS_MIN_S * SAMPLERATE:
-            self._report("translator: heard nothing")
-            return
-        self.phase = "working..."
-        self._jobs.put(audio)
+            if not self.auto:          # in auto mode a lull is normal, not news
+                self._report("translator: heard nothing")
+        else:
+            self.phase = "working..."
+            self._jobs.put(audio)
+        if self.auto:                  # continuous mode: listen right on
+            self._start_capture()
 
     # ---- pipeline (worker thread) ----
 

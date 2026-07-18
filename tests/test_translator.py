@@ -231,6 +231,38 @@ check("auto-send stops capture", not tr.capturing)
 check("auto-send translates", wait_event(state) is not None)
 wait_idle(tr)
 
+# ---- continuous mode (the TRANS strip chip) ----
+tr.toggle_auto()
+check("auto starts capture", tr.auto and tr.capturing and state.trans_hold)
+check("auto persisted", state.trans_auto is True)
+check("auto row label", "AUTO" in tr.row_label())
+
+# a lull may not fill the tap: it gets trimmed back to the pre-roll
+tap = state.trans_tap
+for _ in range(400):                   # ~4 s of silence blocks
+    tap.put_nowait(np.zeros(512, np.float32))
+state.in_level = 0.0
+time.sleep(0.4)                        # a few watcher ticks
+check("silence trimmed to pre-roll", tap.qsize() <= 64, f"{tap.qsize()}")
+
+# speaking then pausing sends the utterance AND keeps listening
+for _ in range(120):
+    tap.put_nowait(blk)
+state.in_level = 0.5
+time.sleep(0.25)
+state.in_level = 0.0
+check("auto-send translates in auto mode", wait_event(state, 4.0) is not None)
+t0 = time.time()
+while not tr.capturing and time.time() - t0 < 2.0:
+    time.sleep(0.05)
+check("auto keeps listening after send", tr.capturing and tr.auto)
+wait_idle(tr)
+
+tr.toggle_auto()
+check("auto off stops capture", not tr.auto and not tr.capturing
+      and not state.trans_hold)
+check("auto off persisted", state.trans_auto is False)
+
 # ---- a transient pack-fetch failure must stay retryable ----
 # (this file's apkg stub raises from update_package_index = network down;
 # that must NOT blacklist the language like a definitive index miss does)
