@@ -471,7 +471,7 @@ class Translator:
                 and self.ai.proc is not None):
             through_ai = self.ai.inject(wav)
         if not through_ai:
-            self.state.events.put(("tts", samples, fx))
+            self.state.events.put(("trans", samples, fx))
         mirrored = (self.monitor is not None and self.monitor.on
                     and not through_ai)
         if self.player is not None and not mirrored:

@@ -134,7 +134,7 @@ check("empty capture reported", "heard nothing" in state.status_msg)
 # ---- full pipeline: Norwegian speech -> English TTS on the mic channel ----
 speak_into(tr, state)
 ev = wait_event(state)
-check("tts event lands", ev is not None and ev[0] == "tts")
+check("trans event lands", ev is not None and ev[0] == "trans")
 check("event carries fx flag", ev is not None and ev[2] is True)
 check("translated nb->en", "[nb->en]" in tr.last, tr.last)
 check("english voice picked",

@@ -22,6 +22,7 @@ PERSIST_FIELDS = {
     "voice_gain":   (0.0, 1.5),
     "clip_gain":    (0.0, 1.5),
     "tts_gain":     (0.0, 1.5),
+    "trans_gain":   (0.0, 1.5),
     "tts_rate":     (-10.0, 10.0),
     "gate_db":      (-70.0, -10.0),
     "ai_pitch":     (-24.0, 24.0),
@@ -127,6 +128,7 @@ class State:
         self.trans_hold = False       # capturing: outgoing voice path silent
         self.trans_tap = None         # Queue while capturing (raw mic blocks)
         self.trans_auto = False       # continuous translate (TRANS strip chip)
+        self.trans_gain = 1.0         # translated speech level on the mic channel
         self.harvest_on = False       # collect own-voice training clips
         self.harvest_q = None         # Queue while harvesting (raw mic blocks)
         self.listen_on = False        # incoming speech translator
@@ -164,6 +166,7 @@ class State:
         self.in_level = 0.0           # audio thread -> UI mic meter (block peak)
         self.monitor_q = None         # set to a Queue while self-listen is on
         self.record_q = None          # set to a Queue while recording
+        self.cards_collapsed = set()  # dashboard cards folded to their header
 
     def set_pitch(self, semis):
         # The shifter is owned by the audio thread; hand the change over via the
@@ -265,6 +268,7 @@ class State:
             data = {k: getattr(self, k) for k in PERSIST_FIELDS}
             data["preset_idx"] = self.preset_idx
             data["ai_pitches"] = dict(self.ai_pitches)
+            data["cards_collapsed"] = sorted(self.cards_collapsed)
         return data
 
     def restore(self, data):
@@ -305,6 +309,9 @@ class State:
                     str(k): int(max(-24, min(24, v)))
                     for k, v in pitches.items()
                     if isinstance(k, str) and isinstance(v, (int, float))}
+            folded = data.get("cards_collapsed")
+            if isinstance(folded, list):       # dashboard collapse memory
+                self.cards_collapsed = {str(k) for k in folded}
         if semis is not None:
             self.set_pitch(semis)
 

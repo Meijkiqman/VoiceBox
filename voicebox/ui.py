@@ -190,6 +190,11 @@ class Menu:
                 adjust=self._adjust_tts_rate))
         if translator is not None:
             self.items.append(MenuItem(
+                "Continuous translate",
+                lambda: "ON" if translator.auto else "off",
+                select=translator.toggle_auto,
+                adjust=lambda d: translator.toggle_auto()))
+            self.items.append(MenuItem(
                 "Translate",
                 translator.row_label,
                 select=translator.toggle,
@@ -209,6 +214,13 @@ class Menu:
                 translator.voice_label,
                 select=lambda: translator.cycle_voice(+1),
                 adjust=translator.cycle_voice))
+            self.items.append(MenuItem(
+                "Translate volume",
+                lambda: f"{s.trans_gain:.0%}",
+                adjust=lambda d: s.nudge("trans_gain", d * 0.05),
+                slider=(lambda: s.trans_gain,
+                        lambda v: s.set_val("trans_gain", v),
+                        0.0, 1.5, "pct")))
         if listener is not None:
             self.items.append(MenuItem(
                 "Incoming speech",
@@ -238,9 +250,13 @@ class Menu:
         if harvester is not None:
             self.items.append(MenuItem(
                 "Voice harvest",
-                harvester.label,
+                lambda: "ON" if harvester.on else
+                        ("full" if harvester.full else "off"),
                 select=harvester.toggle,
                 adjust=lambda d: harvester.toggle()))
+            self.items.append(MenuItem(
+                "Dataset",
+                lambda: f"{harvester.minutes:.1f}/60 min"))
         if trainer is not None and trainer.available:
             self.items.append(MenuItem(
                 "Retrain AI voice",
@@ -252,6 +268,12 @@ class Menu:
                 self._rec_label,
                 select=recorder.toggle,
                 adjust=lambda d: recorder.toggle()))
+        if monitor is not None:
+            self.items.append(MenuItem(
+                "HEAR self-listen",
+                lambda: "ON" if monitor.on else "off",
+                select=self._toggle_monitor,
+                adjust=lambda d: self._toggle_monitor()))
         if hotkeys is not None:
             self.items.append(MenuItem(
                 "Global hotkeys",
@@ -429,22 +451,47 @@ class Menu:
             it.adjust(d)
 
 
+# module-level debug registry: run_ui refreshes these hit-rect dicts every
+# frame so the headless tests can aim real clicks instead of replicating
+# layout math. Read-only for everyone but run_ui.
+ui_debug = {}
+
+
 def run_ui(state, stop_flag, dev_line, err_line="", monitor=None, board=None,
            ai=None, tts=None, hotkeys=None, engine=None, recorder=None,
            scenes=None, translator=None, harvester=None, trainer=None,
            listener=None):
-    """VoiceBox skin, ported from design/VoiceBox Skin.dc.html.
+    """VoiceBox dashboard, ported from design/VoiceBox Dashboard.dc.html.
 
-    Faithful to the tokens JSON + motion spec in that file: Space Grotesk for
-    labels / JetBrains Mono for values, cyan accent with a single glow recipe
-    reserved for focus, sliding focus highlight (120ms), eased pixel scrolling
-    (140ms), tile trigger flash (250ms easeIn), segmented mic meter with
-    peak-hold, and toast-style status chips. easeOut(t)=1-(1-t)^2 per spec.
+    One self-contained card per feature - TRANSLATOR, AI VOICE, MY VOICE,
+    VOICE, TEXT-TO-SPEECH, INCOMING TRANSLATOR, SYSTEM - in fixed 296px
+    columns (page pad/gaps 12), plus the SOUNDBOARD as a pinned 320px
+    column on the right and a slim SCENES strip under the header. Cards
+    collapse to their 32px header (state persists); card headers are focus
+    stops (TAB cycles them); every card carries its own volume slider.
+    Tokens, fonts and the motion recipes (single glow, 250ms flash, 140ms
+    eased scroll, easeOut(t)=1-(1-t)^2) carry over from the previous skin.
     """
+    import os
     import pygame
     pygame.init()
     pygame.display.set_caption("VoiceBox")
-    screen = pygame.display.set_mode(WINDOW_SIZE, pygame.RESIZABLE)
+    # headless screenshot hook (tests/dev): VOICEBOX_SHOT=path[@WxH][:frames]
+    shot_path, shot_frames, shot_size = "", 0, WINDOW_SIZE
+    shot = os.environ.get("VOICEBOX_SHOT", "")
+    if shot:
+        if ":" in shot.rpartition(".png")[2] or shot.count(":") > (1 if os.name == "nt" else 0):
+            shot, _, nf = shot.rpartition(":")
+            shot_frames = int(nf or 8)
+        else:
+            shot_frames = 8
+        if "@" in shot:
+            shot, _, wh = shot.partition("@")
+            w_, _, h_ = wh.partition("x")
+            shot_size = (int(w_), int(h_))
+        shot_path = shot
+    screen = pygame.display.set_mode(shot_size if shot_path else WINDOW_SIZE,
+                                     pygame.RESIZABLE)
     try:                          # OS-level minimum = the design's base size
         from pygame._sdl2.video import Window as _SDLWindow
         _SDLWindow.from_display_module().minimum_size = WINDOW_SIZE
@@ -452,13 +499,12 @@ def run_ui(state, stop_flag, dev_line, err_line="", monitor=None, board=None,
         pass
     clock = pygame.time.Clock()
     pygame.key.set_repeat(320, 110)           # held arrows auto-repeat
+    frame_no = 0
 
     cfg = load_controls()
     keymap, clipmap = build_keymap(cfg, pygame)
     pad = cfg["gamepad"]
 
-    # controls.json is user-edited: coerce wrong-shaped values instead of
-    # crashing the event loop (e.g. "select": 0 instead of [0]).
     def _buttons(v):
         if isinstance(v, int):
             return [v]
@@ -500,7 +546,7 @@ def run_ui(state, stop_flag, dev_line, err_line="", monitor=None, board=None,
         "peak":        (255, 255, 255), "scrollTrack": (22, 27, 34),
         "scrollThumb": (58, 70, 83),    "headerTop":   (20, 24, 31),
         "headerBot":   (16, 20, 26),    "footerTop":   (16, 20, 26),
-        "footerBot":   (13, 16, 21),
+        "footerBot":   (13, 16, 21),    "cardBg":      (13, 16, 20),
     }
     ACCENT_TINT = ((51, 214, 255, 26), (51, 214, 255, 13))
     DANGER_TINT = ((255, 77, 94, 20), (255, 77, 94, 10))
@@ -510,7 +556,6 @@ def run_ui(state, stop_flag, dev_line, err_line="", monitor=None, board=None,
         return (int(a[0] + (b[0] - a[0]) * t), int(a[1] + (b[1] - a[1]) * t),
                 int(a[2] + (b[2] - a[2]) * t))
 
-    # fonts: bundled TTFs (assets/fonts) with system fallbacks
     FONTS_DIR = BASE_DIR / "assets" / "fonts"
 
     def _font(fname, size, fallback, bold=False):
@@ -554,8 +599,6 @@ def run_ui(state, stop_flag, dev_line, err_line="", monitor=None, board=None,
         return None
 
     # ------------------------------------------------------------- caches
-    # Rendering is cached (text, gradients, glows): re-rendering every frame
-    # competes with the audio callback for the GIL and can cause dropouts.
     text_cache = {}
 
     def T(fnt, s, color):
@@ -627,98 +670,199 @@ def run_ui(state, stop_flag, dev_line, err_line="", monitor=None, board=None,
         return surf
 
     # ----------------------------------------------------- layout (tokens JSON)
-    HEADER_H, FOOTER_H = 52, 32
-    LEFT_W = 370
-    VIEW_TOP = HEADER_H
-    L_X, L_RIGHT = 10, LEFT_W - 14
-    L_W = L_RIGHT - L_X
+    HEADER_H, FOOTER_H, SCENE_H = 52, 32, 40
+    PAGE_PAD = COL_GAP = CARD_GAP = 12
+    CARD_W, SB_W = 296, 320
+    CARD_HDR, PAD_X, PAD_TOP, PAD_BOT = 32, 8, 6, 8
     ROW_HGT, ROW_GAP = 34, 2
-    HDR_FIRST, HDR_HGT = 24, 30
-    LIST_PAD_TOP = 6
-    G_X = LEFT_W + 14
     COLS, GGAP, TILE_H = 3, 8, 62
-    STRIP_Y, STRIP_H = VIEW_TOP + 10, 30
-    GRID_TOP = STRIP_Y + STRIP_H + 10
-    # TTS panel: bottom strip of the right pane (header / input / phrase list)
-    TTS_H = 210
-    TTS_IN_H = 30
+    CHIP_H = 24
+    TTS_IN_H, TTS_LIST_H = 30, 100
     TTS_ROW_H, TTS_ROW_GAP = 30, 2
 
-    # window-size-dependent geometry, owned by relayout(): the window is
-    # resizable (drag edges / Aero snap); the left pane keeps its width, the
-    # soundboard grid and TTS panel absorb the extra space.
-    WIN_W = WIN_H = 0
-    VIEW_BOT = VIEW_H = G_RIGHT = TILE_W = 0
-    TTS_TOP = TTS_IN_Y = TTS_LIST_TOP = 0
-    LIST_RECT = TTS_LIST_RECT = GRID_RECT = None
+    CARD_TOP = HEADER_H + SCENE_H
+    WIN_W = WIN_H = VIEW_BOT = 0
+    SB_X = 0
+    sb_rect = sb_grid_rect = tts_list_rect = None
+    cards_area = None
+    TILE_W = 0
+
+    idx_of = {it.label: i for i, it in enumerate(menu.items)}
+
+    def _rows(*labels):
+        return [idx_of[l] for l in labels if l in idx_of]
+
+    def card(key, title, rows, dot=None, summary=None, dim=None, show=True):
+        return {"key": key, "title": title, "rows": rows, "dot": dot,
+                "summary": summary, "dim": dim, "show": show}
+
+    CARD_DEFS = [
+        card("translator", "TRANSLATOR",
+             _rows("Continuous translate", "Translate", "Translate from",
+                   "Translate to", "Translate voice", "Translate volume"),
+             dot=(lambda: translator.auto) if translator else None,
+             summary=(lambda: f"{translator.source().upper()} > "
+                              f"{translator.target().upper()}")
+             if translator else None,
+             show=translator is not None),
+        card("ai", "AI VOICE",
+             _rows("AI voice", "AI character", "AI pitch", "AI voice FX"),
+             dot=(lambda: ai.proc is not None) if ai else None,
+             summary=(lambda: ai.status.upper()) if ai else None,
+             # dim only a resting card: loading/error must stay readable
+             dim=(lambda: ai.proc is None and ai.status == "off")
+             if ai else None,
+             show=ai is not None and ai.available),
+        card("myvoice", "MY VOICE",
+             _rows("Voice harvest", "Dataset", "Retrain AI voice"),
+             dot=(lambda: harvester.on) if harvester else None,
+             summary=(lambda: "EXP"),
+             show=harvester is not None),
+        card("voice", "VOICE",
+             _rows("Preset", "Save preset", "Pitch", "Robot voice",
+                   "Helmet doubler", "Grit / growl", "Reverb", "Echo",
+                   "Bass boost", "Radio voice", "Noise gate", "Mic",
+                   "Voice volume"),
+             dot=lambda: not state.mic_muted),
+        card("tts", "TEXT-TO-SPEECH",
+             _rows("TTS voice", "TTS rate", "TTS voice FX", "TTS volume"),
+             summary=lambda: f"{len(tts.phrases)} PHRASES"),
+        card("incoming", "INCOMING TRANSLATOR",
+             _rows("Incoming speech", "Listen device", "Speak incoming",
+                   "Listen passthrough"),
+             dot=(lambda: listener.on) if listener else None,
+             dim=(lambda: not listener.on) if listener else None,
+             show=listener is not None),
+        card("system", "SYSTEM",
+             _rows("Input device", "Output device", "Record output",
+                   "HEAR self-listen", "Global hotkeys", "Sound cues",
+                   "Rescan sounds", "Quit"),
+             summary=(lambda: "HOTKEYS ON" if hotkeys is not None
+                      and hotkeys.on else "HOTKEYS OFF")),
+    ]
+    cards = [c for c in CARD_DEFS if c["show"] and c["rows"]]
+    card_of_row = {i: c["key"] for c in cards for i in c["rows"]}
+    collapsed = state.cards_collapsed        # persisted set of card keys
+    SCENE_IDX = idx_of.get("Scene")
+    SAVE_SCENE_IDX = idx_of.get("Save scene")
+    CLIP_VOL_IDX = idx_of.get("Clip volume")
+
+    def card_h(c):
+        if c["key"] in collapsed:
+            return CARD_HDR
+        n = len(c["rows"])
+        h = CARD_HDR + PAD_TOP + n * (ROW_HGT + ROW_GAP) - (ROW_GAP if n else 0) \
+            + PAD_BOT
+        if c["key"] == "tts":
+            h += TTS_IN_H + 6 + TTS_LIST_H + 8
+        return h
+
+    # column layout + focus stops, rebuilt when width/collapse changes
+    columns = []                  # [(x, [(card, y, h), ...]), ...]
+    cards_content_h = 0
+    focus_stops = []              # ("row", item_idx) | ("hdr", card_key)
+    stop_of = {}                  # ("row", i)/("hdr", key) -> stop index
+    stop_y = {}                   # stop index -> content y (for scrolling)
+    layout_dirty = [True]
+
+    def build_layout():
+        nonlocal columns, cards_content_h, focus_stops, stop_of, stop_y
+        avail = WIN_W - PAGE_PAD * 2 - SB_W - COL_GAP
+        n = max(1, (avail + COL_GAP) // (CARD_W + COL_GAP))
+        cols = [[] for _ in range(n)]
+        heights = [0.0] * n
+        for c in cards:           # fixed order, shortest column first
+            j = min(range(n), key=lambda k: heights[k])
+            h = card_h(c)
+            cols[j].append((c, heights[j], h))
+            heights[j] += h + CARD_GAP
+        columns = [(PAGE_PAD + j * (CARD_W + COL_GAP), col)
+                   for j, col in enumerate(cols)]
+        cards_content_h = max(heights) if any(heights) else 0
+        focus_stops, stop_of, stop_y = [], {}, {}
+
+        def add(stop, y):
+            stop_of[stop] = len(focus_stops)
+            stop_y[len(focus_stops)] = y
+            focus_stops.append(stop)
+        if SCENE_IDX is not None:
+            add(("row", SCENE_IDX), -1)      # scene strip: never scrolled
+        if SAVE_SCENE_IDX is not None:
+            add(("row", SAVE_SCENE_IDX), -1)
+        for _x, col in columns:
+            for c, y, h in col:
+                add(("hdr", c["key"]), y)
+                if c["key"] not in collapsed:
+                    for k, ri in enumerate(c["rows"]):
+                        add(("row", ri), y + CARD_HDR + PAD_TOP
+                            + k * (ROW_HGT + ROW_GAP))
+        if CLIP_VOL_IDX is not None:
+            add(("row", CLIP_VOL_IDX), -1)   # pinned soundboard column
+        layout_dirty[0] = False
+
+    fsel = 0        # first stop: the scene chip when scenes exist, else the
+                    # first card header
+
+    def focus_stop():
+        return focus_stops[fsel] if 0 <= fsel < len(focus_stops) else None
+
+    def focus_sync():
+        st = focus_stop()
+        if st and st[0] == "row":
+            menu.sel = st[1]
+
+    def focus_move(d):
+        nonlocal fsel
+        if focus_stops:
+            fsel = (fsel + d) % len(focus_stops)
+            focus_sync()
+
+    def focus_tab(d=1):
+        """Cycle card headers directly (TAB / gamepad shoulders)."""
+        nonlocal fsel
+        hdrs = [k for k, s in enumerate(focus_stops) if s[0] == "hdr"]
+        if not hdrs:
+            return
+        later = [k for k in hdrs if (k - fsel) * d > 0] if d > 0 else \
+                [k for k in reversed(hdrs) if k < fsel]
+        fsel = (later[0] if later else (hdrs[0] if d > 0 else hdrs[-1]))
+        focus_sync()
+
+    def focus_row(i):
+        """Point focus at a row by item index (mouse hover)."""
+        nonlocal fsel
+        st = stop_of.get(("row", i))
+        if st is not None:
+            fsel = st
+        menu.sel = i
+
+    def toggle_collapse(key):
+        nonlocal fsel
+        if key in collapsed:
+            collapsed.discard(key)
+        else:
+            collapsed.add(key)
+        cur = focus_stop()
+        build_layout()
+        fsel = stop_of.get(cur, stop_of.get(("hdr", key), 0))
 
     def relayout():
-        nonlocal WIN_W, WIN_H, VIEW_BOT, VIEW_H, G_RIGHT, TILE_W, TTS_TOP, \
-            TTS_IN_Y, TTS_LIST_TOP, LIST_RECT, TTS_LIST_RECT, GRID_RECT
-        # layout never goes below the design's base size, even if the OS
-        # ignores the window minimum (drawing past the surface just clips)
+        nonlocal WIN_W, WIN_H, VIEW_BOT, SB_X, sb_rect, cards_area, TILE_W
         WIN_W = max(screen.get_width(), WINDOW_SIZE[0])
         WIN_H = max(screen.get_height(), WINDOW_SIZE[1])
         VIEW_BOT = WIN_H - FOOTER_H
-        VIEW_H = VIEW_BOT - VIEW_TOP
-        G_RIGHT = WIN_W - 14 - 8               # 8px scroll gutter
-        TILE_W = (G_RIGHT - G_X - GGAP * (COLS - 1)) // COLS
-        LIST_RECT = pygame.Rect(0, VIEW_TOP, LEFT_W, VIEW_H)
-        TTS_TOP = VIEW_BOT - TTS_H
-        TTS_IN_Y = TTS_TOP + 30
-        TTS_LIST_TOP = TTS_IN_Y + TTS_IN_H + 8
-        TTS_LIST_RECT = pygame.Rect(LEFT_W + 1, TTS_LIST_TOP,
-                                    WIN_W - LEFT_W - 1,
-                                    VIEW_BOT - TTS_LIST_TOP)
-        GRID_RECT = pygame.Rect(LEFT_W + 1, GRID_TOP, WIN_W - LEFT_W - 1,
-                                TTS_TOP - GRID_TOP)
-        # tile width follows the window: re-truncate + measure grid labels
+        SB_X = WIN_W - PAGE_PAD - SB_W
+        sb_rect = pygame.Rect(SB_X, CARD_TOP, SB_W, VIEW_BOT - CARD_TOP - 4)
+        cards_area = pygame.Rect(0, CARD_TOP, SB_X - COL_GAP // 2,
+                                 VIEW_BOT - CARD_TOP)
+        TILE_W = (SB_W - 2 * PAD_X - GGAP * (COLS - 1)) // COLS
+        build_layout()
         rebuild_grid()
-
-    SECTION_OF = {
-        "Scene": "SCENES", "Save scene": "SCENES",
-        "Preset": "VOICE", "Save preset": "VOICE", "Pitch": "VOICE",
-        "Mic": "VOICE", "Noise gate": "VOICE",
-        "Robot voice": "EFFECTS", "Helmet doubler": "EFFECTS",
-        "Grit / growl": "EFFECTS", "Reverb": "EFFECTS", "Echo": "EFFECTS",
-        "Radio voice": "EFFECTS", "Bass boost": "EFFECTS",
-        "Voice volume": "EFFECTS", "Clip volume": "EFFECTS",
-        "AI voice": "AI", "AI character": "AI", "AI pitch": "AI",
-        "AI voice FX": "AI",
-        "TTS voice FX": "TTS", "TTS volume": "TTS",
-        "TTS voice": "TTS", "TTS rate": "TTS",
-        "Translate": "TRANSLATOR", "Translate to": "TRANSLATOR",
-        "Translate from": "TRANSLATOR", "Translate voice": "TRANSLATOR",
-        "Incoming speech": "INCOMING", "Listen device": "INCOMING",
-        "Speak incoming": "INCOMING", "Listen passthrough": "INCOMING",
-        "Voice harvest": "MY VOICE", "Retrain AI voice": "MY VOICE",
-        "Sounds to mic": "SOUNDS", "Pause sounds": "SOUNDS",
-        "Stop all sounds": "SOUNDS", "Rescan sounds": "SOUNDS",
-        "Record output": "SYSTEM", "Global hotkeys": "SYSTEM",
-        "Sound cues": "SYSTEM",
-        "Input device": "DEVICES", "Output device": "DEVICES",
-        "Quit": "SYSTEM",
-    }
-    layout, row_pos = [], {}
-    y_acc, last_sec = LIST_PAD_TOP, None
-    for i, it in enumerate(menu.items):
-        sec = SECTION_OF.get(it.label, last_sec)
-        if sec is not None and sec != last_sec:
-            hh = HDR_FIRST if not layout else HDR_HGT
-            layout.append(("hdr", sec, y_acc, hh))
-            y_acc += hh
-            last_sec = sec
-        layout.append(("row", i, y_acc, ROW_HGT))
-        row_pos[i] = y_acc
-        y_acc += ROW_HGT + ROW_GAP
-    content_h = y_acc + 20
 
     grid_rows, grid_content_h, clips_seen = 0, 0, -1
     clip_by_id, disp_names, clip_secs = {}, [], []
 
     def rebuild_grid():
-        """Grid caches (truncated labels, sizes). Rebuilt after each rescan,
-        so labels only re-measure when the clip list actually changed."""
         nonlocal grid_rows, grid_content_h, clips_seen
         clips_seen = state.clips_version
         grid_rows = (len(state.clips) + COLS - 1) // COLS
@@ -728,7 +872,7 @@ def run_ui(state, stop_flag, dev_line, err_line="", monitor=None, board=None,
         clip_by_id.update({id(c): i for i, c in enumerate(state.clips)})
         disp_names.clear()
         clip_secs.clear()
-        name_max = TILE_W - 20 - 22
+        name_max = TILE_W - 16 - 18
         for nm, c in zip(state.clip_names, state.clips):
             if f_tile.render(nm, True, CLR["text"]).get_width() > name_max:
                 while nm and f_tile.render(nm + "...", True,
@@ -737,32 +881,35 @@ def run_ui(state, stop_flag, dev_line, err_line="", monitor=None, board=None,
                 nm += "..."
             disp_names.append(nm)
             clip_secs.append(f"{len(c) / SAMPLERATE:.1f}s")
-    relayout()
 
     # ----------------------------------------------------------- motion state
-    list_scroll = list_target = 0.0
+    cards_scroll = cards_target = 0.0
     grid_scroll = grid_target = 0.0
     tts_scroll = tts_target = 0.0
     tts_text, tts_focus = "", False
-    tts_trunc = {}                # phrase -> truncated display string
-    focus_y = float(row_pos.get(menu.sel, LIST_PAD_TOP))
-    hover_mix = {}                # element key -> 0..1 hover blend
+    tts_trunc = {}
+    hover_mix = {}
     nudge = {"i": -1, "at": 0.0, "side": 0}
     strip_press = {}
     meter_lit = 0.0
     peak_lit, peak_at = 0.0, 0.0
-    row_hit, strip_hit, grid_hit = {}, {}, {}
+    row_hit, hdr_hit, strip_hit, grid_hit, scene_hit = {}, {}, {}, {}, {}
     tts_row_hit, tts_del_hit, tts_btn_hit = {}, {}, {}
-    arrow_hit = None              # (row, "<" rect, ">" rect) from the last draw
-    slider_hit, slider_track, value_hit = {}, {}, {}   # numeric rows, per draw
-    slider_drag = None            # row index while a slider knob is dragged
-    edit = None                   # {"row": i, "text": str} while typing a value
-    cap_cache = {"key": None, "surf": None}   # caption strip, re-rendered on change
-    cap_hit = None                # caption strip rect from the last draw
+    arrow_hit = None
+    slider_hit, slider_track, value_hit = {}, {}, {}
+    slider_drag = None
+    edit = None
+    cap_cache = {"key": None, "surf": None}
+    cap_hit = None
     last_t = time.time()
+    ui_debug.update(row_hit=row_hit, hdr_hit=hdr_hit, strip_hit=strip_hit,
+                    grid_hit=grid_hit, scene_hit=scene_hit,
+                    tts_row_hit=tts_row_hit, tts_del_hit=tts_del_hit,
+                    tts_btn_hit=tts_btn_hit, slider_track=slider_track,
+                    value_hit=value_hit,
+                    labels=[it.label for it in menu.items], drop_info=None)
 
     def step(cur, target, dt, dur):
-        """One easeOut lerp step toward target (spec: easeOut = 1-(1-t)^2)."""
         if dur <= 0:
             return float(target)
         k = min(1.0, dt / dur)
@@ -780,10 +927,9 @@ def run_ui(state, stop_flag, dev_line, err_line="", monitor=None, board=None,
         return m
 
     def q8(t):
-        return round(t * 8) / 8    # quantize blends so gradient cache stays small
+        return round(t * 8) / 8
 
     def row_at(pos):
-        """Menu row under the mouse (uses the rects from the last draw)."""
         for i, r in row_hit.items():
             if r.collidepoint(pos):
                 return i
@@ -795,7 +941,6 @@ def run_ui(state, stop_flag, dev_line, err_line="", monitor=None, board=None,
             tts_text = ""
 
     def tts_set_focus(on):
-        """Textbox focus: while on, the keyboard belongs to the textbox."""
         nonlocal tts_focus
         if on == tts_focus:
             return
@@ -806,7 +951,6 @@ def run_ui(state, stop_flag, dev_line, err_line="", monitor=None, board=None,
             pass
 
     def flip_page(d):
-        """Step the hotkey page and scroll the grid to show it."""
         nonlocal grid_target
         page = board.set_page(d)
         grid_target = (page * 9 // COLS) * (TILE_H + GGAP)
@@ -832,7 +976,7 @@ def run_ui(state, stop_flag, dev_line, err_line="", monitor=None, board=None,
     def edit_open(i):
         nonlocal edit
         tts_set_focus(False)
-        edit = {"row": i, "text": ""}   # empty box; current value = placeholder
+        edit = {"row": i, "text": ""}
         try:
             pygame.key.start_text_input()
         except Exception:
@@ -861,7 +1005,6 @@ def run_ui(state, stop_flag, dev_line, err_line="", monitor=None, board=None,
         edit_close()
 
     def val_style(val, focused, now):
-        """(font, text color, LED dot color or None) by value semantics."""
         if val == "ON":
             return f_valF, CLR["accent"], CLR["accent"]
         if val == "PAUSED":
@@ -888,7 +1031,6 @@ def run_ui(state, stop_flag, dev_line, err_line="", monitor=None, board=None,
         cy = r.centery
         cur = float(get())
         frac = max(0.0, min(1.0, (cur - lo) / (hi - lo) if hi != lo else 0.0))
-        # value on the right: an input box while editing, else clickable text
         if edit is not None and edit["row"] == i:
             box = pygame.Rect(r.right - 8 - 54, cy - 11, 54, 22)
             screen.blit(grad(box.w, box.h, CLR["headerBot"], CLR["paneLeft"], 5),
@@ -897,7 +1039,7 @@ def run_ui(state, stop_flag, dev_line, err_line="", monitor=None, board=None,
             txt = edit["text"]
             if txt:
                 ts = T(f_valF, txt, CLR["text"])
-            else:                          # empty: current value as placeholder
+            else:
                 ts = T(f_val, val, CLR["faint"])
             tx = box.right - 6 - ts.get_width()
             screen.blit(ts, (tx, cy - ts.get_height() // 2))
@@ -917,16 +1059,21 @@ def run_ui(state, stop_flag, dev_line, err_line="", monitor=None, board=None,
                              ts.get_width(), ts.get_height())
             vh = q8(hover_step(("val", i), vr.inflate(12, 10)
                                .collidepoint(mouse_pos), dt))
-            if vh > 0.3:                   # hint: the number is clickable
+            if vh > 0.3:
                 pygame.draw.rect(screen, mixc(CLR["paneLeft"], CLR["accent"], 0.35),
                                  vr.inflate(12, 8), width=1, border_radius=5)
             screen.blit(ts, vr.topleft)
             value_hit[i] = vr.inflate(12, 10)
             val_left = vr.x - 6
-        # slider track + knob in the middle of the row
+        # slider track + knob; the 296px card leaves less room than the old
+        # 370px pane, so the track starts after the label and squeezes
+        # before it gives up
+        lw = T(f_label, it.label, CLR["text2"]).get_width()
         tx1 = min(val_left - 12, r.right - 10 - 54 - 12)
-        tx0 = max(r.x + 148, tx1 - 124)
-        track = pygame.Rect(tx0, cy - 2, tx1 - tx0, 4)
+        tx0 = max(r.x + 10 + lw + 12, tx1 - 124)
+        if tx1 - tx0 < 36:
+            tx0 = max(r.x + 10 + lw + 8, tx1 - 36)
+        track = pygame.Rect(tx0, cy - 2, max(24, tx1 - tx0), 4)
         pygame.draw.rect(screen, CLR["barTrack"], track, border_radius=2)
         if frac > 0.01:
             pygame.draw.rect(screen, CLR["accent"] if focused else CLR["barFill"],
@@ -1008,20 +1155,173 @@ def run_ui(state, stop_flag, dev_line, err_line="", monitor=None, board=None,
                 if dot:
                     pygame.draw.circle(screen, dot, (right - vs.get_width() - 10, cy), 2)
 
+    def draw_tts_body(r, y):
+        """TEXT-TO-SPEECH card: input box + ADD button, then the phrase list
+        with its own scroll - above the voice/rate/fx/volume rows. Returns
+        the y where the plain rows continue."""
+        nonlocal tts_list_rect, tts_scroll, tts_target
+        bx0, bx1 = r.x + PAD_X, r.right - PAD_X
+        in_rect = pygame.Rect(bx0, y, bx1 - bx0 - 52, TTS_IN_H)
+        add_rect = pygame.Rect(in_rect.right + 6, y,
+                               bx1 - in_rect.right - 6, TTS_IN_H)
+        tts_btn_hit["input"] = in_rect
+        tts_btn_hit["add"] = add_rect
+        hm = q8(hover_step(("tts", "input"), in_rect.collidepoint(mouse_pos), dt))
+        screen.blit(grad(in_rect.w, in_rect.h, CLR["headerBot"],
+                         CLR["paneLeft"], 7), in_rect.topleft)
+        pygame.draw.rect(screen,
+                         CLR["accent"] if tts_focus
+                         else mixc(CLR["stroke"], CLR["strokeHover"], hm),
+                         in_rect, width=1, border_radius=7)
+        screen.set_clip(in_rect.inflate(-8, 0))
+        icy = in_rect.centery
+        if tts_text:
+            tsurf = T(f_val, tts_text, CLR["text"])
+            tx0 = in_rect.x + 10 + min(0, in_rect.w - 20 - tsurf.get_width())
+            screen.blit(tsurf, (tx0, icy - tsurf.get_height() // 2))
+            caret_x = tx0 + tsurf.get_width() + 2
+        else:
+            if not tts_focus:
+                ph = T(f_val, "Type a phrase...", CLR["faint"])
+                screen.blit(ph, (in_rect.x + 10, icy - ph.get_height() // 2))
+            caret_x = in_rect.x + 10
+        if tts_focus and (now * 2.0) % 2 < 1:
+            pygame.draw.line(screen, CLR["accent"],
+                             (caret_x, icy - 8), (caret_x, icy + 8))
+        screen.set_clip(cards_area)
+        can_add = bool(tts_text.strip())
+        hm = q8(hover_step(("tts", "add"), add_rect.collidepoint(mouse_pos), dt))
+        if can_add:
+            pygame.draw.rect(screen, mixc(CLR["accent"], CLR["accentBright"], hm),
+                             add_rect, border_radius=7)
+            asurf = T(f_strip, "ADD", CLR["textOnAccent"])
+        else:
+            screen.blit(grad(add_rect.w, add_rect.h,
+                             mixc(CLR["raisedTop"], CLR["hoverTop"], hm),
+                             mixc(CLR["raisedBot"], CLR["hoverBot"], hm), 7),
+                        add_rect.topleft)
+            pygame.draw.rect(screen, mixc(CLR["stroke"], CLR["strokeHover"], hm),
+                             add_rect, width=1, border_radius=7)
+            asurf = T(f_strip, "ADD", CLR["muted"])
+        screen.blit(asurf, (add_rect.centerx - asurf.get_width() // 2,
+                            add_rect.centery - asurf.get_height() // 2))
+
+        list_top = y + TTS_IN_H + 6
+        tts_list_rect = pygame.Rect(bx0, list_top, bx1 - bx0, TTS_LIST_H)
+        n_ph = len(tts.phrases)
+        tts_content_h = (n_ph * (TTS_ROW_H + TTS_ROW_GAP) - TTS_ROW_GAP + 4
+                         if n_ph else 0)
+        tts_target = max(0.0, min(tts_target,
+                                  max(0.0, tts_content_h - TTS_LIST_H)))
+        tts_scroll = step(tts_scroll, tts_target, dt, 0.14)
+        screen.set_clip(tts_list_rect.clip(cards_area))
+        tts_playing = {}
+        sample_row = {id(tts.samples[t]): i for i, t in enumerate(tts.phrases)
+                      if t in tts.samples}
+        for v in list(state.tts_voices):
+            try:
+                samples, cur = v[0], v[1]
+            except Exception:
+                continue
+            ri = sample_row.get(id(samples))
+            if ri is not None and len(samples):
+                tts_playing[ri] = max(tts_playing.get(ri, 0.0),
+                                      cur / len(samples))
+        if not n_ph:
+            hint = T(f_small, "(none yet - Enter saves, Shift+Enter speaks)",
+                     CLR["faint"])
+            screen.blit(hint, (bx0 + 2, list_top + 6))
+        for i in range(n_ph):
+            ry = list_top - int(tts_scroll) + i * (TTS_ROW_H + TTS_ROW_GAP)
+            if ry + TTS_ROW_H < tts_list_rect.y or ry > tts_list_rect.bottom:
+                continue
+            text = tts.phrases[i]
+            rr = pygame.Rect(bx0, ry, bx1 - bx0, TTS_ROW_H)
+            fl = tts.flash.get(i, 0) - now
+            f = q8(min(1.0, max(0.0, fl / 0.25)) ** 2) if fl > 0 else 0.0
+            hm = q8(hover_step(("ttsrow", i),
+                               rr.collidepoint(mouse_pos)
+                               and tts_list_rect.collidepoint(mouse_pos), dt))
+            screen.blit(grad(rr.w, TTS_ROW_H,
+                             mixc(mixc(CLR["raisedTop"], CLR["hoverTop"], hm),
+                                  CLR["accentDim"], f),
+                             mixc(mixc(CLR["raisedBot"], CLR["hoverBot"], hm),
+                                  CLR["accentDim"], f), 7),
+                        rr.topleft)
+            prog = tts_playing.get(i)
+            bcol = mixc(CLR["stroke"], CLR["accentBright"], f)
+            if prog is not None and f < 0.05:
+                bcol = mixc(CLR["raisedTop"], CLR["accent"], 0.45)
+            elif hm > 0.4 and f < 0.05:
+                bcol = CLR["strokeHover"]
+            pygame.draw.rect(screen, bcol, rr, width=1, border_radius=7)
+            dr = pygame.Rect(rr.right - 6 - 18, rr.centery - 9, 18, 18)
+            dh = q8(hover_step(("ttsdel", i), dr.collidepoint(mouse_pos), dt))
+            pygame.draw.rect(screen, mixc(CLR["strokeHover"], CLR["danger"], dh),
+                             dr, width=1, border_radius=5)
+            xs = T(f_badge, "x", CLR["danger"] if dh > 0.4 else CLR["muted"])
+            screen.blit(xs, (dr.centerx - xs.get_width() // 2,
+                             dr.centery - xs.get_height() // 2))
+            tts_del_hit[i] = dr
+            st_ = tts.status.get(text, "")
+            if st_ == "ready" and text in tts.samples:
+                dur = T(f_small, f"{len(tts.samples[text]) / SAMPLERATE:.1f}s",
+                        CLR["accent"] if prog is not None else CLR["faint"])
+            elif st_ == "error":
+                dur = T(f_small, "err", CLR["danger"])
+            else:
+                a = 0.4 + 0.6 * (0.5 + 0.5 * float(np.sin(now * 2 * np.pi / 1.2)))
+                dur = T(f_small, "...", mixc(CLR["raisedBot"], CLR["muted"], q8(a)))
+            screen.blit(dur, (dr.x - 6 - dur.get_width(),
+                              rr.centery - dur.get_height() // 2))
+            nm = tts_trunc.get(text)
+            if nm is None:
+                if len(tts_trunc) > 400:
+                    tts_trunc.clear()
+                nm, name_w = text, rr.w - 92
+                if f_label.render(nm, True, CLR["text"]).get_width() > name_w:
+                    while nm and f_label.render(nm + "...", True,
+                                                CLR["text"]).get_width() > name_w:
+                        nm = nm[:-1]
+                    nm += "..."
+                tts_trunc[text] = nm
+            hot = prog is not None or f > 0.05
+            pygame.draw.polygon(screen,
+                                CLR["accent"] if hot else
+                                (CLR["muted"] if hm > 0.4 else CLR["faint"]),
+                                [(rr.x + 10, rr.centery - 4),
+                                 (rr.x + 10, rr.centery + 4),
+                                 (rr.x + 16, rr.centery)])
+            ns = T(f_label, nm,
+                   CLR["text"] if (hot or hm > 0.4) else CLR["text2"])
+            screen.blit(ns, (rr.x + 24, rr.centery - ns.get_height() // 2))
+            if prog is not None:
+                pygame.draw.rect(screen, CLR["accent"],
+                                 pygame.Rect(rr.x, rr.bottom - 2,
+                                             max(2, int(rr.w * min(1.0, prog))), 2))
+            tts_row_hit[i] = rr
+        if tts_content_h > TTS_LIST_H:
+            track = pygame.Rect(bx1 - 3, tts_list_rect.y + 2, 3, TTS_LIST_H - 4)
+            pygame.draw.rect(screen, CLR["scrollTrack"], track, border_radius=2)
+            th = max(14, int(track.h * TTS_LIST_H / tts_content_h))
+            tt_y = track.y + int((track.h - th)
+                                 * (tts_scroll / max(1.0, tts_content_h
+                                                     - TTS_LIST_H)))
+            pygame.draw.rect(screen, CLR["scrollThumb"],
+                             pygame.Rect(track.x, tt_y, 3, th), border_radius=2)
+        screen.set_clip(cards_area)
+        return list_top + TTS_LIST_H + 8
+
     # ------------------------------ dropdown picker (Scene / Preset / AI voice)
-    # Pressing one of these rows opens an alphabetical list anchored to the
-    # row; while open it owns keyboard, mouse and controller. Scenes and user
-    # presets are editable in place: right-click (or F2) renames, the x on
-    # the focused row (or Del) deletes. Built-ins and AI characters are not.
     DROP_ROWS = ("Scene", "Preset", "AI character")
-    drop = None                   # dict(items, rect, sel, cur, scroll, ...) | None
+    drop = None
 
     def open_dropdown(row_idx):
         nonlocal drop
         label = menu.items[row_idx].label
         n_builtin = 0
         if label == "Preset":
-            presets = state.presets_all()      # built-ins + user presets
+            presets = state.presets_all()
             n_builtin = len(presets) - len(state.user_presets)
             entries = sorted(((nm, i) for i, (nm, _p) in enumerate(presets)),
                              key=lambda e: e[0].lower())
@@ -1040,7 +1340,7 @@ def run_ui(state, stop_flag, dev_line, err_line="", monitor=None, board=None,
             cur = next((k for k, (_nm, i) in enumerate(entries)
                         if i == ai.sel), 0)
         elif label == "Scene" and scenes is not None:
-            if not scenes.scenes:              # nothing to pick from yet
+            if not scenes.scenes:
                 state.status_msg = "no scenes yet - dial a setup, then Save scene"
                 state.status_at = time.time()
                 return
@@ -1053,18 +1353,23 @@ def run_ui(state, stop_flag, dev_line, err_line="", monitor=None, board=None,
                         if i == scenes.sel), 0)
         else:
             return
+        # anchored to the row's on-screen rect (cards move; rects are truth)
+        anchor = row_hit.get(row_idx)
+        if anchor is None:
+            return
         item_h, pad = 28, 4
         hint_h = 16 if any(m["mut"] for m in meta) else 0
-        ry = VIEW_TOP - int(list_scroll) + row_pos[row_idx]
         want = len(items) * item_h + pad * 2 + hint_h
-        below = VIEW_BOT - 6 - (ry + ROW_HGT + 4)
-        above = ry - 4 - (VIEW_TOP + 6)
+        w = max(240, anchor.w - 12)
+        x = min(anchor.x + 6, WIN_W - PAGE_PAD - w)
+        below = VIEW_BOT - 6 - (anchor.bottom + 4)
+        above = anchor.y - 4 - (CARD_TOP + 6)
         if below >= min(want, 200) or below >= above:
-            h, y = min(want, below), ry + ROW_HGT + 4
+            h, y = min(want, below), anchor.bottom + 4
         else:
-            h, y = min(want, above), ry - 4 - min(want, above)
-        rect = pygame.Rect(L_X + 10, y, L_W - 20, h)
-        rows_h = h - hint_h                    # hint strip is pinned, not scrolled
+            h, y = min(want, above), anchor.y - 4 - min(want, above)
+        rect = pygame.Rect(x, y, w, h)
+        rows_h = h - hint_h
         max_scroll = max(0, want - hint_h - rows_h)
         scroll = min(max_scroll,
                      max(0, cur * item_h + pad - (rows_h - item_h) // 2))
@@ -1104,14 +1409,13 @@ def run_ui(state, stop_flag, dev_line, err_line="", monitor=None, board=None,
         drop = None
 
     def drop_refresh(sel=None, focus_orig=None):
-        """Rebuild the open picker in place (after a rename or delete)."""
         nonlocal drop
         if drop is None:
             return
         row_idx, scroll = drop["row"], drop["scroll"]
         drop = None
         open_dropdown(row_idx)
-        if drop is None:                       # e.g. the last scene was deleted
+        if drop is None:
             return
         if focus_orig is not None:
             sel = next((k for k, m in enumerate(drop["meta"])
@@ -1129,7 +1433,7 @@ def run_ui(state, stop_flag, dev_line, err_line="", monitor=None, board=None,
             return
         if drop["kind"] == "scene":
             scenes.delete(m["orig"])
-        else:                                  # a user preset
+        else:
             state.delete_user_preset(m["orig"] - drop["n_builtin"])
         drop_refresh(sel=k)
 
@@ -1140,7 +1444,7 @@ def run_ui(state, stop_flag, dev_line, err_line="", monitor=None, board=None,
             return
         drop["sel"] = k
         drop_scroll_to(k)
-        drop["edit"] = {"i": k, "text": ""}    # empty box; old name = placeholder
+        drop["edit"] = {"i": k, "text": ""}
         try:
             pygame.key.start_text_input()
         except Exception:
@@ -1154,18 +1458,17 @@ def run_ui(state, stop_flag, dev_line, err_line="", monitor=None, board=None,
             except Exception:
                 pass
         if not commit or ed is None or not ed["text"].strip():
-            return                             # empty box = keep the old name
+            return
         m = drop["meta"][ed["i"]]
         if drop["kind"] == "scene":
             scenes.rename(m["orig"], ed["text"])
         else:
             state.rename_user_preset(m["orig"] - drop["n_builtin"], ed["text"])
-        drop_refresh(focus_orig=m["orig"])     # follow it to its sorted spot
+        drop_refresh(focus_orig=m["orig"])
 
     def drop_event(event):
-        """All input routes here while the picker is open."""
         nonlocal drop
-        if drop["edit"] is not None:           # inline rename owns the input
+        if drop["edit"] is not None:
             if event.type == pygame.TEXTINPUT:
                 drop["edit"]["text"] = (drop["edit"]["text"] + event.text)[:40]
             elif event.type == pygame.KEYDOWN:
@@ -1178,8 +1481,8 @@ def run_ui(state, stop_flag, dev_line, err_line="", monitor=None, board=None,
                     drop_rename_end(False)
             elif (event.type == pygame.MOUSEBUTTONDOWN
                     and event.button in (1, 2, 3)):
-                drop_rename_end(True)          # clicking elsewhere confirms
-            return                             # (buttons 4+: wheel/side, skip)
+                drop_rename_end(True)
+            return
         if event.type == pygame.KEYDOWN:
             held_keys.add(event.key)
             act = key_action(event.key)
@@ -1197,7 +1500,7 @@ def run_ui(state, stop_flag, dev_line, err_line="", monitor=None, board=None,
         elif event.type == pygame.MOUSEBUTTONDOWN and event.button in (1, 3):
             r = drop["rect"]
             if not r.collidepoint(event.pos):
-                drop_close()                   # click elsewhere just closes
+                drop_close()
                 return
             if event.button == 1:
                 di = next((k for k, rr in drop["del_hit"].items()
@@ -1208,16 +1511,13 @@ def run_ui(state, stop_flag, dev_line, err_line="", monitor=None, board=None,
             i = (event.pos[1] - r.y - drop["pad"]
                  + int(drop["scroll"])) // drop["item_h"]
             if 0 <= i < len(drop["items"]):
-                if event.button == 3:          # right-click: rename in place
+                if event.button == 3:
                     drop_rename_start(i)
                 else:
                     drop["sel"] = i
                     drop_pick()
         elif event.type == pygame.MOUSEBUTTONDOWN and event.button == 2:
-            drop_close()                   # middle click closes; buttons 4+
-                                           # are wheel-legacy events (Windows
-                                           # sends them with every MOUSEWHEEL)
-                                           # and must not kill the picker
+            drop_close()
         elif event.type == pygame.JOYBUTTONDOWN:
             if   event.button in pad_select: drop_pick()
             elif event.button in pad_back:   drop_close()
@@ -1226,11 +1526,18 @@ def run_ui(state, stop_flag, dev_line, err_line="", monitor=None, board=None,
             elif event.value[1] == -1: drop_nav(+1)
 
     def do_select():
-        """Row select: dropdown rows open the picker, the rest act directly."""
+        """Focused stop select: header = collapse, dropdown rows = picker,
+        the rest act directly."""
+        st = focus_stop()
+        if st is not None and st[0] == "hdr":
+            toggle_collapse(st[1])
+            return
         if menu.items[menu.sel].label in DROP_ROWS:
             open_dropdown(menu.sel)
         else:
             menu.on_select()
+
+    relayout()
 
     # ================================================================== loop
     while not stop_flag.is_set():
@@ -1248,16 +1555,15 @@ def run_ui(state, stop_flag, dev_line, err_line="", monitor=None, board=None,
                 relayout()
 
             elif event.type == pygame.DROPFILE:
-                # drag a sound onto the window -> copy into sounds/ + rescan
                 src = Path(event.file)
                 if src.is_file() and src.suffix.lower() in (
                         ".wav", ".flac", ".ogg", ".mp3"):
                     try:
                         SOUNDS_DIR.mkdir(exist_ok=True)
                         dest = SOUNDS_DIR / src.name
-                        if not dest.exists():   # same name = already there
+                        if not dest.exists():
                             shutil.copy2(src, dest)
-                        board.rescan()          # reports the new count itself
+                        board.rescan()
                     except Exception as e:
                         state.status_msg = f"drop: {e}"
                         state.status_at = time.time()
@@ -1278,7 +1584,7 @@ def run_ui(state, stop_flag, dev_line, err_line="", monitor=None, board=None,
             elif event.type == pygame.JOYDEVICEADDED:
                 pygame.joystick.Joystick(event.device_index).init()
             elif event.type == pygame.JOYDEVICEREMOVED:
-                pass                                   # instance dies on its own
+                pass
 
             elif event.type == pygame.TEXTINPUT:
                 if edit is not None:
@@ -1288,7 +1594,6 @@ def run_ui(state, stop_flag, dev_line, err_line="", monitor=None, board=None,
                     tts_text = (tts_text + event.text)[:TTS_MAX_CHARS]
 
             elif event.type == pygame.KEYDOWN and edit is not None:
-                # the value box owns the keyboard (digits are clip hotkeys!)
                 held_keys.add(event.key)
                 if event.key == pygame.K_BACKSPACE:
                     edit["text"] = edit["text"][:-1]
@@ -1298,7 +1603,6 @@ def run_ui(state, stop_flag, dev_line, err_line="", monitor=None, board=None,
                     edit_close()
 
             elif event.type == pygame.KEYDOWN and tts_focus:
-                # the textbox owns the keyboard: no menu nav, no clip hotkeys
                 held_keys.add(event.key)
                 if event.key == pygame.K_BACKSPACE:
                     tts_text = tts_text[:-1]
@@ -1308,24 +1612,27 @@ def run_ui(state, stop_flag, dev_line, err_line="", monitor=None, board=None,
                                 + get_clipboard_text())[:TTS_MAX_CHARS]
                 elif event.key in (pygame.K_RETURN, pygame.K_KP_ENTER):
                     if getattr(event, "mod", 0) & pygame.KMOD_SHIFT:
-                        tts.say(tts_text)      # speak once, don't save
+                        tts.say(tts_text)
                     else:
                         tts_commit()
                 elif event.key == pygame.K_ESCAPE:
                     tts_set_focus(False)
 
             elif event.type == pygame.KEYDOWN:
-                # auto-repeat is only for navigation/adjust; a held clip key must
-                # not stack a new copy of the clip every repeat interval
                 repeat = event.key in held_keys
                 held_keys.add(event.key)
                 if event.key in clipmap:
-                    if not repeat:                 # page-relative; play() bounds-checks
+                    if not repeat:
                         board.play_hot(clipmap[event.key])
                     continue
+                if event.key == pygame.K_TAB:
+                    if not repeat:
+                        focus_tab(-1 if getattr(event, "mod", 0)
+                                  & pygame.KMOD_SHIFT else +1)
+                    continue
                 act = key_action(event.key)
-                if   act == "up":         menu.on_up()
-                elif act == "down":       menu.on_down()
+                if   act == "up":         focus_move(-1)
+                elif act == "down":       focus_move(+1)
                 elif act == "left":       go_left()
                 elif act == "right":      go_right()
                 elif repeat:              pass
@@ -1339,28 +1646,33 @@ def run_ui(state, stop_flag, dev_line, err_line="", monitor=None, board=None,
             elif event.type == pygame.KEYUP:
                 held_keys.discard(event.key)
             elif event.type == pygame.WINDOWFOCUSLOST:
-                held_keys.clear()         # KEYUPs are lost on focus change
+                held_keys.clear()
 
             elif event.type == pygame.MOUSEMOTION:
-                if slider_drag is not None:        # live drag: follow the mouse
+                if slider_drag is not None:
                     slider_set_from_x(slider_drag, event.pos[0])
                 else:
                     idx = row_at(event.pos)
                     if idx is not None:
-                        menu.sel = idx
+                        focus_row(idx)
+                    else:
+                        hk = next((k for k, r in hdr_hit.items()
+                                   if r.collidepoint(event.pos)), None)
+                        if hk is not None and ("hdr", hk) in stop_of:
+                            fsel = stop_of[("hdr", hk)]
 
             elif event.type == pygame.MOUSEBUTTONUP and event.button == 1:
                 slider_drag = None
 
             elif event.type == pygame.MOUSEWHEEL:
-                mx, my = pygame.mouse.get_pos()
-                if mx >= LEFT_W and my >= TTS_TOP:           # over the TTS panel
-                    tts_target -= event.y * (TTS_ROW_H + TTS_ROW_GAP)
-                elif mx >= LEFT_W:                           # over the grid pane
+                mpos = pygame.mouse.get_pos()
+                if sb_grid_rect is not None and sb_grid_rect.collidepoint(mpos):
                     grid_target -= event.y * (TILE_H + GGAP)
-                else:
-                    for _ in range(abs(event.y)):
-                        menu.on_up() if event.y > 0 else menu.on_down()
+                elif (tts_list_rect is not None
+                        and tts_list_rect.collidepoint(mpos)):
+                    tts_target -= event.y * (TTS_ROW_H + TTS_ROW_GAP)
+                elif cards_area.collidepoint(mpos):
+                    cards_target -= event.y * (ROW_HGT + ROW_GAP) * 2
 
             elif event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
                 if cap_hit is not None and cap_hit.collidepoint(event.pos):
@@ -1370,7 +1682,7 @@ def run_ui(state, stop_flag, dev_line, err_line="", monitor=None, board=None,
                 if edit is not None and not value_hit.get(
                         edit["row"],
                         pygame.Rect(0, 0, 0, 0)).collidepoint(event.pos):
-                    edit_commit()          # clicking elsewhere confirms it
+                    edit_commit()
                 hit = next((k for k, r in strip_hit.items()
                             if r.collidepoint(event.pos)), None)
                 if hit is not None:
@@ -1381,41 +1693,40 @@ def run_ui(state, stop_flag, dev_line, err_line="", monitor=None, board=None,
                     board.toggle_pause()
                 elif hit == "stop":
                     board.stop()
-                elif hit == "hear":
-                    menu._toggle_monitor()
-                elif hit == "trans":
-                    translator.toggle_auto()
                 elif hit == "page":
                     flip_page(+1)
+                elif (hk := next((k for k, r in hdr_hit.items()
+                                  if r.collidepoint(event.pos)), None)) is not None:
+                    if ("hdr", hk) in stop_of:
+                        fsel = stop_of[("hdr", hk)]
+                    toggle_collapse(hk)
                 elif (r := tts_btn_hit.get("add")) is not None \
                         and r.collidepoint(event.pos):
                     tts_commit()
-                elif (r := tts_btn_hit.get("fx")) is not None \
-                        and r.collidepoint(event.pos):
-                    menu._toggle_tts_fx()
                 elif (di := next((i for i, r in tts_del_hit.items()
                                   if r.collidepoint(event.pos)), None)) is not None:
                     tts.delete(di)
                 elif (ti := next((i for i, r in tts_row_hit.items()
                                   if r.collidepoint(event.pos)), None)) is not None:
                     tts.play(ti)
-                elif GRID_RECT.collidepoint(event.pos) and (
+                elif (sb_grid_rect is not None
+                        and sb_grid_rect.collidepoint(event.pos) and (
                         ci := next((c for c, r in grid_hit.items()
-                                    if r.collidepoint(event.pos)), None)) is not None:
+                                    if r.collidepoint(event.pos)), None)) is not None):
                     board.play(ci)
                 elif (si := next((k for k, rr in slider_hit.items()
                                   if rr.collidepoint(event.pos)), None)) is not None:
-                    menu.sel = si
-                    slider_drag = si       # jump to the click, then live-drag
+                    focus_row(si)
+                    slider_drag = si
                     slider_set_from_x(si, event.pos[0])
                 elif (vi := next((k for k, rr in value_hit.items()
                                   if rr.collidepoint(event.pos)), None)) is not None:
-                    menu.sel = vi
-                    edit_open(vi)          # type the number directly
+                    focus_row(vi)
+                    edit_open(vi)
                 else:
                     idx = row_at(event.pos)
                     if idx is not None:
-                        menu.sel = idx
+                        focus_row(idx)
                         it = menu.items[idx]
                         on_row = arrow_hit is not None and arrow_hit[0] == idx
                         if it.adjust and on_row and arrow_hit[1].collidepoint(event.pos):
@@ -1437,13 +1748,11 @@ def run_ui(state, stop_flag, dev_line, err_line="", monitor=None, board=None,
                 if jnow - joy_last >= cooldown:
                     joy_last = jnow
                     hx, hy = event.value
-                    if   hy ==  1: menu.on_up()
-                    elif hy == -1: menu.on_down()
+                    if   hy ==  1: focus_move(-1)
+                    elif hy == -1: focus_move(+1)
                     elif hx == -1: go_left()
                     elif hx ==  1: go_right()
 
-            # left stick only (axes 0/1): filter BEFORE touching the cooldown so
-            # trigger/right-stick events can't silently eat the nav timer
             elif (event.type == pygame.JOYAXISMOTION and event.axis in (0, 1)
                   and abs(event.value) > threshold):
                 jnow = time.time()
@@ -1452,12 +1761,12 @@ def run_ui(state, stop_flag, dev_line, err_line="", monitor=None, board=None,
                     if event.axis == 0:
                         go_left() if event.value < 0 else go_right()
                     else:
-                        menu.on_up() if event.value < 0 else menu.on_down()
+                        focus_move(-1) if event.value < 0 else focus_move(+1)
 
-        # rescan (menu row, drag-drop, hotkey) may have swapped the clip list
-        # during the event phase: refresh the grid caches before drawing
         if state.clips_version != clips_seen:
             rebuild_grid()
+        if layout_dirty[0]:
+            build_layout()
 
         # ------------------------------------------------------------- draw
         mouse_pos = pygame.mouse.get_pos()
@@ -1483,13 +1792,13 @@ def run_ui(state, stop_flag, dev_line, err_line="", monitor=None, board=None,
         level = state.in_level
         db = 20.0 * float(np.log10(max(level, 1e-4)))
         seg_target = max(0.0, min(22.0, (db + 48.0) / 48.0 * 22.0))
-        if seg_target > meter_lit:                     # attack 40ms / decay 240ms
+        if seg_target > meter_lit:
             meter_lit = min(seg_target, meter_lit + dt / 0.040 * 22.0)
         else:
             meter_lit = max(seg_target, meter_lit - dt / 0.240 * 22.0)
         if meter_lit >= peak_lit:
             peak_lit, peak_at = meter_lit, now
-        elif now - peak_at > 0.9:                      # hold 900ms, fall 300ms
+        elif now - peak_at > 0.9:
             peak_lit = max(meter_lit, peak_lit - dt / 0.300 * 22.0)
         mx_right = WIN_W - 16
         db_s = (T(f_small, "MUTED", CLR["danger"]) if state.mic_muted
@@ -1512,161 +1821,314 @@ def run_ui(state, stop_flag, dev_line, err_line="", monitor=None, board=None,
         screen.blit(mic_s, (seg_x0 - 10 - mic_s.get_width(),
                             (HEADER_H - mic_s.get_height()) // 2))
 
-        # ------------------------------------------------- left pane: settings
-        pygame.draw.rect(screen, CLR["paneLeft"], LIST_RECT)
-        pygame.draw.line(screen, CLR["strokeSoft"], (LEFT_W, VIEW_TOP),
-                         (LEFT_W, VIEW_BOT))
-
-        ry = row_pos.get(menu.sel, LIST_PAD_TOP)
-        if ry - list_target < 6:                       # keep focus in view
-            list_target = max(0.0, ry - 6)
-        elif ry + ROW_HGT - list_target > VIEW_H - 6:
-            list_target = ry + ROW_HGT - (VIEW_H - 6)
-        list_target = max(0.0, min(list_target, max(0.0, content_h - VIEW_H)))
-        list_scroll = step(list_scroll, list_target, dt, 0.14)
-        focus_y = step(focus_y, float(ry), dt, 0.12)
-
-        screen.set_clip(LIST_RECT)
-        row_hit.clear()
-        slider_hit.clear()
-        slider_track.clear()
-        value_hit.clear()
-        arrow_hit = None
-        base_y = VIEW_TOP - int(list_scroll)
-
-        # sliding focus highlight: ring + tint + the one glow
-        fr = pygame.Rect(L_X, base_y + int(focus_y), L_W, ROW_HGT)
-        screen.blit(glow(L_W, ROW_HGT, CLR["accent"], 7), (fr.x - G_PAD, fr.y - G_PAD))
-        screen.blit(grad(L_W, ROW_HGT, ACCENT_TINT[0], ACCENT_TINT[1], 7), fr.topleft)
-        pygame.draw.rect(screen, CLR["accent"], fr, width=1, border_radius=7)
-
-        for kind, data, ly, lh in layout:
-            sy = base_y + ly
-            if sy + lh < VIEW_TOP or sy > VIEW_BOT:
-                continue
-            if kind == "hdr":
-                hs = TT(f_hdr, data, CLR["faint"], 2)
-                ty = sy + lh - hs.get_height() - 4
-                screen.blit(hs, (L_X + 4, ty))
-                lyy = ty + hs.get_height() // 2
-                pygame.draw.line(screen, CLR["strokeSoft"],
-                                 (L_X + 4 + hs.get_width() + 8, lyy), (L_RIGHT - 4, lyy))
-                continue
-            i = data
-            it = menu.items[i]
-            r = pygame.Rect(L_X, sy, L_W, ROW_HGT)
-            row_hit[i] = r
-            focused = (i == menu.sel)
-            fl = menu.flash.get(i, 0) - now            # select-confirm flash
+        # -------------------------------------------------------- scene strip
+        scene_hit.clear()
+        pygame.draw.rect(screen, CLR["paneLeft"],
+                         pygame.Rect(0, HEADER_H, WIN_W, SCENE_H))
+        pygame.draw.line(screen, CLR["strokeSoft"], (0, HEADER_H + SCENE_H - 1),
+                         (WIN_W, HEADER_H + SCENE_H - 1))
+        scy = HEADER_H + SCENE_H // 2
+        hs = TT(f_hdr, "SCENES", CLR["faint"], 2)
+        screen.blit(hs, (PAGE_PAD + 4, scy - hs.get_height() // 2))
+        sx = PAGE_PAD + 4 + hs.get_width() + 12
+        if SCENE_IDX is not None and scenes is not None:
+            name = scenes.applied or "-"
+            focused = focus_stop() == ("row", SCENE_IDX)
+            ns = T(f_labelF if focused else f_label, name,
+                   CLR["text"] if focused else CLR["text2"])
+            w = ns.get_width() + 34
+            r = pygame.Rect(sx, scy - 13, w, 26)
+            hm = q8(hover_step(("scene", "pick"), r.collidepoint(mouse_pos), dt))
+            fl = menu.flash.get(SCENE_IDX, 0) - now
             if fl > 0:
                 f = q8(min(1.0, fl / 0.25) ** 2)
-                screen.blit(grad(L_W, ROW_HGT,
-                                 mixc(CLR["paneLeft"], CLR["accentDim"], f),
-                                 mixc(CLR["paneLeft"], CLR["accentDim"], f * 0.8), 7),
+                screen.blit(grad(w, 26, mixc(CLR["raisedTop"], CLR["accentDim"], f),
+                                 mixc(CLR["raisedBot"], CLR["accentDim"], f), 6),
                             r.topleft)
-            elif not focused:
-                hm = q8(hover_step(("row", i), r.collidepoint(mouse_pos), dt))
-                if hm > 0:
-                    top = mixc(CLR["paneLeft"], CLR["hoverTop"], hm)
-                    screen.blit(grad(L_W, ROW_HGT, top, top, 7), r.topleft)
-                    if hm > 0.4:
-                        pygame.draw.rect(screen, CLR["strokeHover"], r,
-                                         width=1, border_radius=7)
-            if (it.label == "AI voice" and ai is not None
-                    and ai.status == "error" and not focused):
-                screen.blit(grad(L_W, ROW_HGT, DANGER_TINT[0], DANGER_TINT[1], 7),
+            else:
+                screen.blit(grad(w, 26,
+                                 mixc(CLR["raisedTop"], CLR["hoverTop"], hm),
+                                 mixc(CLR["raisedBot"], CLR["hoverBot"], hm), 6),
                             r.topleft)
-                pygame.draw.rect(screen, mixc(CLR["paneLeft"], CLR["danger"], 0.35),
-                                 r, width=1, border_radius=7)
+            if focused:
+                screen.blit(glow(w, 26, CLR["accent"], 6), (r.x - G_PAD, r.y - G_PAD))
+                pygame.draw.rect(screen, CLR["accent"], r, width=1, border_radius=6)
+            else:
+                pygame.draw.rect(screen, mixc(CLR["stroke"], CLR["strokeHover"], hm),
+                                 r, width=1, border_radius=6)
+            screen.blit(ns, (r.x + 10, r.centery - ns.get_height() // 2))
+            ar = T(f_val, "v", CLR["faint"])
+            screen.blit(ar, (r.right - 16, r.centery - ar.get_height() // 2))
+            row_hit[SCENE_IDX] = r
+            scene_hit["pick"] = r
+            sx = r.right + 8
+        if SAVE_SCENE_IDX is not None and scenes is not None:
+            focused = focus_stop() == ("row", SAVE_SCENE_IDX)
+            ss = T(f_strip, "SAVE SCENE", CLR["accent"] if focused else CLR["muted"])
+            w = ss.get_width() + 22
+            r = pygame.Rect(sx, scy - 13, w, 26)
+            hm = q8(hover_step(("scene", "save"), r.collidepoint(mouse_pos), dt))
+            screen.blit(grad(w, 26, mixc(CLR["raisedTop"], CLR["hoverTop"], hm),
+                             mixc(CLR["raisedBot"], CLR["hoverBot"], hm), 6),
+                        r.topleft)
+            if focused:
+                screen.blit(glow(w, 26, CLR["accent"], 6), (r.x - G_PAD, r.y - G_PAD))
+                pygame.draw.rect(screen, CLR["accent"], r, width=1, border_radius=6)
+            else:
+                pygame.draw.rect(screen, mixc(CLR["stroke"], CLR["strokeHover"], hm),
+                                 r, width=1, border_radius=6)
+            screen.blit(ss, (r.x + 11, r.centery - ss.get_height() // 2))
+            row_hit[SAVE_SCENE_IDX] = r
+            scene_hit["save"] = r
+            badge = T(f_badge, "CTRL+ALT+S", CLR["faint"])
+            br = pygame.Rect(r.right + 8, scy - 9, badge.get_width() + 12, 18)
+            pygame.draw.rect(screen, CLR["strokeSoft"], br, width=1,
+                             border_radius=4)
+            screen.blit(badge, (br.x + 6, br.centery - badge.get_height() // 2))
+            hint = T(f_small, "scene = fx + ai + tts, one press", CLR["faint"])
+            if br.right + 12 + hint.get_width() < SB_X - 8:
+                screen.blit(hint, (br.right + 12, scy - hint.get_height() // 2))
 
-            ls = T(f_labelF if focused else f_label, it.label,
-                   CLR["text"] if focused else CLR["text2"])
-            screen.blit(ls, (r.x + 12, r.y + (ROW_HGT - ls.get_height()) // 2))
-            if it.value_fn is not None:
-                draw_value(r, i, it, it.value_fn(), focused, now)
-            elif it.select:
-                vs = T(f_val, "↵", CLR["faint"])
-                screen.blit(vs, (r.right - 10 - vs.get_width(),
-                                 r.y + (ROW_HGT - vs.get_height()) // 2))
+        # ------------------------------------------------------- feature cards
+        st = focus_stop()
+        if st is not None and fsel in stop_y and stop_y[fsel] >= 0:
+            area_h = cards_area.height
+            y0, y1 = stop_y[fsel], stop_y[fsel] + ROW_HGT + CARD_GAP
+            if y0 - cards_target < 6:
+                cards_target = max(0.0, y0 - 6)
+            elif y1 - cards_target > area_h - 6:
+                cards_target = y1 - (area_h - 6)
+        cards_target = max(0.0, min(cards_target,
+                                    max(0.0, cards_content_h - cards_area.height + 8)))
+        cards_scroll = step(cards_scroll, cards_target, dt, 0.14)
 
-        screen.blit(grad(LEFT_W - 6, 26, (13, 16, 20, 0), (13, 16, 20, 255)),
-                    (0, VIEW_BOT - 26))
-        if content_h > VIEW_H:
-            track = pygame.Rect(LEFT_W - 5, VIEW_TOP + 4, 3, VIEW_H - 8)
+        for d_ in (row_hit, hdr_hit, slider_hit, slider_track, value_hit,
+                   tts_btn_hit, tts_row_hit, tts_del_hit):
+            keep_scene = {k: v for k, v in d_.items()
+                          if d_ is row_hit and k in (SCENE_IDX, SAVE_SCENE_IDX)}
+            d_.clear()
+            d_.update(keep_scene)
+        arrow_hit = None
+        tts_list_rect = None
+        screen.set_clip(cards_area)
+        base_y = CARD_TOP + 8 - int(cards_scroll)
+        for col_x, col in columns:
+            for c, cy0, ch_ in col:
+                r = pygame.Rect(col_x, base_y + int(cy0), CARD_W, ch_)
+                if r.bottom < CARD_TOP or r.y > VIEW_BOT:
+                    hdr_hit[c["key"]] = pygame.Rect(0, -99, 0, 0)
+                    continue
+                is_collapsed = c["key"] in collapsed
+                dim = (not is_collapsed and c["dim"] is not None
+                       and c["dim"]())
+                # card shell
+                pygame.draw.rect(screen, CLR["cardBg"], r, border_radius=8)
+                pygame.draw.rect(screen, CLR["strokeSoft"], r, width=1,
+                                 border_radius=8)
+                # header (a focus stop; click/enter collapses)
+                hr = pygame.Rect(r.x, r.y, r.w, CARD_HDR)
+                hdr_hit[c["key"]] = hr
+                hdr_focused = st == ("hdr", c["key"])
+                hm = q8(hover_step(("hdr", c["key"]),
+                                   hr.collidepoint(mouse_pos), dt))
+                if hdr_focused:
+                    screen.blit(glow(hr.w, hr.h, CLR["accent"], 8),
+                                (hr.x - G_PAD, hr.y - G_PAD))
+                    screen.blit(grad(hr.w, hr.h, ACCENT_TINT[0], ACCENT_TINT[1], 8),
+                                hr.topleft)
+                    pygame.draw.rect(screen, CLR["accent"], hr, width=1,
+                                     border_radius=8)
+                elif hm > 0:
+                    top = mixc(CLR["cardBg"], CLR["hoverTop"], hm)
+                    screen.blit(grad(hr.w, hr.h, top, top, 8), hr.topleft)
+                # chevron
+                chx, chy = r.x + 13, r.y + CARD_HDR // 2
+                ccol = CLR["accent"] if hdr_focused else CLR["faint"]
+                if is_collapsed:
+                    pygame.draw.polygon(screen, ccol,
+                                        [(chx - 2, chy - 4), (chx - 2, chy + 4),
+                                         (chx + 4, chy)])
+                else:
+                    pygame.draw.polygon(screen, ccol,
+                                        [(chx - 4, chy - 2), (chx + 4, chy - 2),
+                                         (chx, chy + 4)])
+                ts = TT(f_hdr, c["title"],
+                        CLR["text"] if hdr_focused else CLR["faint"], 2)
+                screen.blit(ts, (r.x + 26, r.y + (CARD_HDR - ts.get_height()) // 2))
+                # right side of the header: LED dot + summary
+                hx_r = r.right - 10
+                if c["summary"] is not None:
+                    try:
+                        summ = str(c["summary"]())[:26]
+                    except Exception:
+                        summ = ""
+                    if summ:
+                        sms = T(f_small, summ, CLR["muted"])
+                        hx_r -= sms.get_width()
+                        screen.blit(sms, (hx_r, r.y + (CARD_HDR - sms.get_height()) // 2))
+                        hx_r -= 8
+                if c["dot"] is not None:
+                    on = False
+                    try:
+                        on = bool(c["dot"]())
+                    except Exception:
+                        pass
+                    pygame.draw.circle(screen, CLR["accent"] if on else CLR["faint"],
+                                       (hx_r - 3, r.y + CARD_HDR // 2), 2)
+                if is_collapsed:
+                    continue
+                pygame.draw.line(screen, CLR["strokeSoft"],
+                                 (r.x + 1, r.y + CARD_HDR - 1),
+                                 (r.right - 2, r.y + CARD_HDR - 1))
+                # body rows
+                ry_ = r.y + CARD_HDR + PAD_TOP
+                if c["key"] == "tts":
+                    ry_ = draw_tts_body(r, ry_)
+                for i in c["rows"]:
+                    it = menu.items[i]
+                    rr = pygame.Rect(r.x + PAD_X, ry_, r.w - 2 * PAD_X, ROW_HGT)
+                    row_hit[i] = rr
+                    focused = st == ("row", i)
+                    fl = menu.flash.get(i, 0) - now
+                    if focused:
+                        screen.blit(glow(rr.w, ROW_HGT, CLR["accent"], 7),
+                                    (rr.x - G_PAD, rr.y - G_PAD))
+                        screen.blit(grad(rr.w, ROW_HGT, ACCENT_TINT[0],
+                                         ACCENT_TINT[1], 7), rr.topleft)
+                        pygame.draw.rect(screen, CLR["accent"], rr, width=1,
+                                         border_radius=7)
+                    elif fl > 0:
+                        f = q8(min(1.0, fl / 0.25) ** 2)
+                        screen.blit(grad(rr.w, ROW_HGT,
+                                         mixc(CLR["cardBg"], CLR["accentDim"], f),
+                                         mixc(CLR["cardBg"], CLR["accentDim"], f * 0.8),
+                                         7), rr.topleft)
+                    else:
+                        hm = q8(hover_step(("row", i),
+                                           rr.collidepoint(mouse_pos), dt))
+                        if hm > 0:
+                            top = mixc(CLR["cardBg"], CLR["hoverTop"], hm)
+                            screen.blit(grad(rr.w, ROW_HGT, top, top, 7),
+                                        rr.topleft)
+                            if hm > 0.4:
+                                pygame.draw.rect(screen, CLR["strokeHover"], rr,
+                                                 width=1, border_radius=7)
+                    if (it.label == "AI voice" and ai is not None
+                            and ai.status == "error" and not focused):
+                        screen.blit(grad(rr.w, ROW_HGT, DANGER_TINT[0],
+                                         DANGER_TINT[1], 7), rr.topleft)
+                        pygame.draw.rect(screen,
+                                         mixc(CLR["cardBg"], CLR["danger"], 0.35),
+                                         rr, width=1, border_radius=7)
+                    ls = T(f_labelF if focused else f_label, it.label,
+                           CLR["text"] if focused else CLR["text2"])
+                    screen.blit(ls, (rr.x + 10,
+                                     rr.y + (ROW_HGT - ls.get_height()) // 2))
+                    if it.value_fn is not None:
+                        draw_value(rr, i, it, it.value_fn(), focused, now)
+                    elif it.select:
+                        vs = T(f_val, "-", CLR["faint"])
+                        screen.blit(vs, (rr.right - 10 - vs.get_width(),
+                                         rr.y + (ROW_HGT - vs.get_height()) // 2))
+                    ry_ += ROW_HGT + ROW_GAP
+                if dim:
+                    ov = pygame.Surface((r.w - 2, r.h - CARD_HDR - 1),
+                                        pygame.SRCALPHA)
+                    ov.fill((*CLR["cardBg"], 158))     # body at ~38% (design 03)
+                    screen.blit(ov, (r.x + 1, r.y + CARD_HDR))
+        screen.set_clip(None)
+        if cards_content_h > cards_area.height:
+            track = pygame.Rect(SB_X - COL_GAP + 3, CARD_TOP + 4, 3,
+                                cards_area.height - 8)
             pygame.draw.rect(screen, CLR["scrollTrack"], track, border_radius=2)
-            th = max(24, int(track.height * VIEW_H / content_h))
+            th = max(24, int(track.height * cards_area.height / cards_content_h))
             tt_y = track.y + int((track.height - th)
-                                 * (list_scroll / max(1.0, content_h - VIEW_H)))
+                                 * (cards_scroll
+                                    / max(1.0, cards_content_h - cards_area.height)))
             pygame.draw.rect(screen, CLR["scrollThumb"],
                              pygame.Rect(track.x, tt_y, 3, th), border_radius=2)
-        screen.set_clip(None)
 
-        # -------------------------------------------- right pane: control strip
+        # -------------------------------------------------- soundboard column
+        pygame.draw.rect(screen, CLR["cardBg"], sb_rect, border_radius=8)
+        pygame.draw.rect(screen, CLR["strokeSoft"], sb_rect, width=1,
+                         border_radius=8)
+        sb_ts = TT(f_hdr, "SOUNDBOARD", CLR["faint"], 2)
+        screen.blit(sb_ts, (sb_rect.x + 12,
+                            sb_rect.y + (CARD_HDR - sb_ts.get_height()) // 2))
+        cnt = T(f_small, f"{len(state.clips)} SOUNDS", CLR["faint"])
+        screen.blit(cnt, (sb_rect.right - 10 - cnt.get_width(),
+                          sb_rect.y + (CARD_HDR - cnt.get_height()) // 2))
+        pygame.draw.line(screen, CLR["strokeSoft"],
+                         (sb_rect.x + 1, sb_rect.y + CARD_HDR - 1),
+                         (sb_rect.right - 2, sb_rect.y + CARD_HDR - 1))
+        # chips: TO MIC / PAUSE / STOP / PG
         strip_hit.clear()
-        sx = G_X
-        strip_defs = [
-            ("mic", "TO MIC: ON" if state.clips_to_mic else "TO MIC: OFF",
-             state.clips_to_mic, CLR["accent"], ACCENT_TINT),
-            ("pause", "PAUSED" if state.clips_paused else "PAUSE",
-             state.clips_paused, CLR["warning"], WARN_TINT),
-            ("stop", "STOP", False, CLR["accent"], None),
-        ]
-        if monitor is not None:            # self-listen toggle ("hear myself")
-            strip_defs.append(
-                ("hear", "HEAR: ON" if monitor.on else "HEAR: OFF",
-                 monitor.on, CLR["accent"], ACCENT_TINT))
-        if translator is not None:         # continuous speech translation
-            strip_defs.append(
-                ("trans", "TRANS: ON" if translator.auto else "TRANS: OFF",
-                 translator.auto, CLR["accent"], ACCENT_TINT))
+        chips = [("mic", "TO MIC", state.clips_to_mic, CLR["accent"], ACCENT_TINT),
+                 ("pause", "PAUSED" if state.clips_paused else "PAUSE",
+                  state.clips_paused, CLR["warning"], WARN_TINT),
+                 ("stop", "STOP", False, CLR["accent"], None)]
         n_pages = board.page_count()
-        if n_pages > 1:                # hotkey page chip; click steps onward
-            strip_defs.append(("page",
-                               f"PAGE {state.clip_page + 1}/{n_pages}",
-                               False, CLR["accent"], None))
-        for key, lab, active, acol, tint in strip_defs:
-            hm = q8(hover_step(("strip", key),
-                               pygame.Rect(sx, STRIP_Y, 10, STRIP_H).collidepoint(mouse_pos)
-                               or (strip_hit.get(key) or pygame.Rect(0, 0, 0, 0)
-                                   ).collidepoint(mouse_pos), dt))
-            base_ts = T(f_strip, lab, acol if active else
-                        (CLR["text"] if hm > 0.5 else CLR["muted"]))
-            w = base_ts.get_width() + 24 + (12 if active else 0)
-            r = pygame.Rect(sx, STRIP_Y, w, STRIP_H)
+        if n_pages > 1:
+            chips.append(("page", f"PG {state.clip_page + 1}/{n_pages}",
+                          False, CLR["accent"], None))
+        sx = sb_rect.x + PAD_X
+        chy0 = sb_rect.y + CARD_HDR + 6
+        for key, lab, active, acol, tint in chips:
+            base_ts = T(f_strip, lab, acol if active else CLR["muted"])
+            w = base_ts.get_width() + 18 + (10 if active else 0)
+            r = pygame.Rect(sx, chy0, w, CHIP_H)
             hm = q8(hover_step(("strip2", key), r.collidepoint(mouse_pos), dt))
             pm = max(0.0, 1.0 - (now - strip_press.get(key, 0)) / 0.08) \
                 if strip_press.get(key) else 0.0
             if active and tint:
-                screen.blit(grad(w, STRIP_H, tint[0], tint[1], 7), r.topleft)
+                screen.blit(grad(w, CHIP_H, tint[0], tint[1], 6), r.topleft)
                 pygame.draw.rect(screen, mixc(CLR["bg"], acol, 0.45), r,
-                                 width=1, border_radius=7)
+                                 width=1, border_radius=6)
             else:
                 top = mixc(CLR["raisedTop"], CLR["hoverTop"], hm)
                 bot = mixc(CLR["raisedBot"], CLR["hoverBot"], hm)
                 if pm > 0:
                     top = mixc(top, CLR["active"], q8(pm))
                     bot = mixc(bot, CLR["active"], q8(pm))
-                screen.blit(grad(w, STRIP_H, top, bot, 7), r.topleft)
+                screen.blit(grad(w, CHIP_H, top, bot, 6), r.topleft)
                 pygame.draw.rect(screen, mixc(CLR["stroke"], CLR["strokeHover"], hm),
-                                 r, width=1, border_radius=7)
-            tx = r.x + 12
+                                 r, width=1, border_radius=6)
+            tx = r.x + 9
             if active:
                 pygame.draw.circle(screen, acol, (tx + 2, r.centery), 2)
-                tx += 12
+                tx += 10
             ts = T(f_strip, lab, acol if active else
                    (CLR["text"] if hm > 0.5 else CLR["muted"]))
             screen.blit(ts, (tx, r.centery - ts.get_height() // 2))
             strip_hit[key] = r
-            sx = r.right + 8
-        cnt = T(f_small, f"{len(state.clips)} SOUNDS", CLR["faint"])
-        screen.blit(cnt, (G_RIGHT - cnt.get_width(),
-                          STRIP_Y + (STRIP_H - cnt.get_height()) // 2))
+            sx = r.right + 6
+        # clip volume row
+        gy_top = chy0 + CHIP_H + 4
+        if CLIP_VOL_IDX is not None:
+            it = menu.items[CLIP_VOL_IDX]
+            rr = pygame.Rect(sb_rect.x + PAD_X, gy_top, SB_W - 2 * PAD_X, ROW_HGT)
+            row_hit[CLIP_VOL_IDX] = rr
+            focused = st == ("row", CLIP_VOL_IDX)
+            if focused:
+                screen.blit(glow(rr.w, ROW_HGT, CLR["accent"], 7),
+                            (rr.x - G_PAD, rr.y - G_PAD))
+                screen.blit(grad(rr.w, ROW_HGT, ACCENT_TINT[0], ACCENT_TINT[1], 7),
+                            rr.topleft)
+                pygame.draw.rect(screen, CLR["accent"], rr, width=1, border_radius=7)
+            ls = T(f_labelF if focused else f_label, "Clip volume",
+                   CLR["text"] if focused else CLR["text2"])
+            screen.blit(ls, (rr.x + 10, rr.y + (ROW_HGT - ls.get_height()) // 2))
+            draw_value(rr, CLIP_VOL_IDX, it, it.value_fn(), focused, now)
+            gy_top = rr.bottom + 6
 
-        # ------------------------------------------------ right pane: the grid
+        # the grid (internal scroll)
+        sb_grid_rect = pygame.Rect(sb_rect.x + PAD_X, gy_top,
+                                   SB_W - 2 * PAD_X, sb_rect.bottom - 24 - gy_top)
+        G_X0 = sb_grid_rect.x
         grid_target = max(0.0, min(grid_target,
-                                   max(0.0, grid_content_h - GRID_RECT.height)))
+                                   max(0.0, grid_content_h - sb_grid_rect.height)))
         grid_scroll = step(grid_scroll, grid_target, dt, 0.14)
-        screen.set_clip(GRID_RECT)
+        screen.set_clip(sb_grid_rect)
         grid_hit.clear()
         playing = {}
         sources = [state.voices]
@@ -1675,32 +2137,30 @@ def run_ui(state, stop_flag, dev_line, err_line="", monitor=None, board=None,
         for src in sources:
             for v in list(src):
                 try:
-                    samples, cur = v
+                    samples, cur = v[0], v[1]
                 except Exception:
                     continue
                 pidx = clip_by_id.get(id(samples))
                 if pidx is not None and len(samples):
                     playing[pidx] = max(playing.get(pidx, 0.0), cur / len(samples))
-
         if not state.clips:
-            hint = T(f_small, "(no sounds - put audio files in ./sounds)",
-                     CLR["faint"])
-            screen.blit(hint, (G_X, GRID_TOP + 8))
-        gy0 = GRID_TOP - int(grid_scroll)
+            hint = T(f_small, "(no sounds - put files in ./sounds)", CLR["faint"])
+            screen.blit(hint, (G_X0, sb_grid_rect.y + 8))
+        gy0 = sb_grid_rect.y - int(grid_scroll)
         first_row = max(0, int(grid_scroll) // (TILE_H + GGAP))
         last_row = min(grid_rows,
-                       (int(grid_scroll) + GRID_RECT.height) // (TILE_H + GGAP) + 2)
+                       (int(grid_scroll) + sb_grid_rect.height) // (TILE_H + GGAP) + 2)
         for ci in range(first_row * COLS, min(len(state.clips), last_row * COLS)):
             g_r, g_c = divmod(ci, COLS)
-            r = pygame.Rect(G_X + g_c * (TILE_W + GGAP),
+            r = pygame.Rect(G_X0 + g_c * (TILE_W + GGAP),
                             gy0 + g_r * (TILE_H + GGAP), TILE_W, TILE_H)
             fl = board.flash.get(ci, 0) - now
             f = q8(min(1.0, max(0.0, fl / 0.25)) ** 2) if fl > 0 else 0.0
             hm = q8(hover_step(("tile", ci),
                                r.collidepoint(mouse_pos)
-                               and GRID_RECT.collidepoint(mouse_pos), dt))
+                               and sb_grid_rect.collidepoint(mouse_pos), dt))
             prog = playing.get(ci)
-            if f > 0.05:                               # trigger flash + glow
+            if f > 0.05:
                 gsurf = glow(TILE_W, TILE_H, CLR["accent"], 8)
                 gsurf.set_alpha(int(255 * f))
                 screen.blit(gsurf, (r.x - G_PAD, r.y - G_PAD))
@@ -1715,26 +2175,26 @@ def run_ui(state, stop_flag, dev_line, err_line="", monitor=None, board=None,
                 bcol = CLR["strokeHover"]
             pygame.draw.rect(screen, bcol, r, width=1, border_radius=8)
             ns = T(f_tile, disp_names[ci], CLR["text"])
-            screen.blit(ns, (r.x + 10, r.y + 8))
-            if prog is not None:                       # playing: ▶ + progress edge
+            screen.blit(ns, (r.x + 8, r.y + 7))
+            if prog is not None:
                 ds = T(f_small, clip_secs[ci], CLR["accent"])
-                dy = r.bottom - 10 - ds.get_height()
+                dy = r.bottom - 9 - ds.get_height()
                 py_ = dy + ds.get_height() // 2
                 pygame.draw.polygon(screen, CLR["accent"],
-                                    [(r.x + 10, py_ - 3), (r.x + 10, py_ + 3),
-                                     (r.x + 15, py_)])
-                screen.blit(ds, (r.x + 19, dy))
+                                    [(r.x + 8, py_ - 3), (r.x + 8, py_ + 3),
+                                     (r.x + 13, py_)])
+                screen.blit(ds, (r.x + 17, dy))
                 pygame.draw.rect(screen, CLR["accent"],
                                  pygame.Rect(r.x, r.bottom - 2,
                                              max(2, int(TILE_W * min(1.0, prog))), 2))
             else:
                 ds = T(f_small, clip_secs[ci],
                        CLR["muted"] if hm > 0.5 else CLR["faint"])
-                screen.blit(ds, (r.x + 10, r.bottom - 10 - ds.get_height()))
+                screen.blit(ds, (r.x + 8, r.bottom - 9 - ds.get_height()))
             pg0 = state.clip_page * 9
-            if pg0 <= ci < pg0 + 9:                    # hotkey badge (this page)
+            if pg0 <= ci < pg0 + 9:
                 hot = prog is not None or f > 0.05
-                brect = pygame.Rect(r.right - 10 - 16, r.y + 8, 16, 16)
+                brect = pygame.Rect(r.right - 8 - 15, r.y + 7, 15, 15)
                 pygame.draw.rect(screen,
                                  mixc(CLR["bg"], CLR["accent"], 0.45) if hot
                                  else CLR["strokeHover"],
@@ -1744,213 +2204,23 @@ def run_ui(state, stop_flag, dev_line, err_line="", monitor=None, board=None,
                 screen.blit(bs, (brect.centerx - bs.get_width() // 2,
                                  brect.centery - bs.get_height() // 2))
             grid_hit[ci] = r
-
-        screen.blit(grad(GRID_RECT.width - 8, 26, (11, 13, 16, 0), (11, 13, 16, 255)),
-                    (GRID_RECT.x, GRID_RECT.bottom - 26))
-        if grid_content_h > GRID_RECT.height:
-            track = pygame.Rect(WIN_W - 17, GRID_TOP + 4, 3,
-                                GRID_RECT.height - 8)
+        screen.blit(grad(sb_grid_rect.width, 22, (13, 16, 20, 0), (13, 16, 20, 255)),
+                    (sb_grid_rect.x, sb_grid_rect.bottom - 22))
+        screen.set_clip(None)
+        if grid_content_h > sb_grid_rect.height:
+            track = pygame.Rect(sb_rect.right - 7, sb_grid_rect.y + 2, 3,
+                                sb_grid_rect.height - 4)
             pygame.draw.rect(screen, CLR["scrollTrack"], track, border_radius=2)
-            th = max(24, int(track.height * GRID_RECT.height / grid_content_h))
+            th = max(24, int(track.height * sb_grid_rect.height / grid_content_h))
             tt_y = track.y + int((track.height - th)
                                  * (grid_scroll / max(1.0, grid_content_h
-                                                      - GRID_RECT.height)))
+                                                      - sb_grid_rect.height)))
             pygame.draw.rect(screen, CLR["scrollThumb"],
                              pygame.Rect(track.x, tt_y, 3, th), border_radius=2)
-        screen.set_clip(None)
-
-        # ------------------------------------------------- right pane: TTS panel
-        pygame.draw.line(screen, CLR["strokeSoft"], (LEFT_W + 1, TTS_TOP),
-                         (WIN_W, TTS_TOP))
-        tts_btn_hit.clear()
-        hs = TT(f_hdr, "TEXT TO SPEECH", CLR["faint"], 2)
-        screen.blit(hs, (G_X + 4, TTS_TOP + 10))
-        # FX chip: same state as the "TTS voice FX" menu row; reads AI while
-        # the phrase would come out in the AI voice
-        fx_on = state.tts_fx
-        ai_live = ai is not None and ai.proc is not None
-        fx_lab = ("FX: AI" if fx_on and ai_live else
-                  "FX: ON" if fx_on else "FX: OFF")
-        fs = T(f_strip, fx_lab, CLR["accent"] if fx_on else CLR["muted"])
-        fxr = pygame.Rect(G_RIGHT - fs.get_width() - 20 - (10 if fx_on else 0),
-                          TTS_TOP + 6, fs.get_width() + 20 + (10 if fx_on else 0), 22)
-        hm = q8(hover_step(("tts", "fx"), fxr.collidepoint(mouse_pos), dt))
-        if fx_on:
-            screen.blit(grad(fxr.w, fxr.h, ACCENT_TINT[0], ACCENT_TINT[1], 6),
-                        fxr.topleft)
-            pygame.draw.rect(screen, mixc(CLR["bg"], CLR["accent"], 0.45), fxr,
-                             width=1, border_radius=6)
-        else:
-            screen.blit(grad(fxr.w, fxr.h,
-                             mixc(CLR["raisedTop"], CLR["hoverTop"], hm),
-                             mixc(CLR["raisedBot"], CLR["hoverBot"], hm), 6),
-                        fxr.topleft)
-            pygame.draw.rect(screen, mixc(CLR["stroke"], CLR["strokeHover"], hm),
-                             fxr, width=1, border_radius=6)
-        fx_x = fxr.x + 10
-        if fx_on:
-            pygame.draw.circle(screen, CLR["accent"], (fx_x + 2, fxr.centery), 2)
-            fx_x += 10
-        screen.blit(fs, (fx_x, fxr.centery - fs.get_height() // 2))
-        tts_btn_hit["fx"] = fxr
-        lyy = TTS_TOP + 10 + hs.get_height() // 2
-        pygame.draw.line(screen, CLR["strokeSoft"],
-                         (G_X + 4 + hs.get_width() + 8, lyy), (fxr.x - 10, lyy))
-
-        # input box + ADD button
-        in_rect = pygame.Rect(G_X, TTS_IN_Y, G_RIGHT - G_X - 66, TTS_IN_H)
-        add_rect = pygame.Rect(in_rect.right + 8, TTS_IN_Y,
-                               G_RIGHT - in_rect.right - 8, TTS_IN_H)
-        tts_btn_hit["input"] = in_rect
-        tts_btn_hit["add"] = add_rect
-        hm = q8(hover_step(("tts", "input"), in_rect.collidepoint(mouse_pos), dt))
-        screen.blit(grad(in_rect.w, in_rect.h, CLR["headerBot"], CLR["paneLeft"], 7),
-                    in_rect.topleft)
-        pygame.draw.rect(screen,
-                         CLR["accent"] if tts_focus
-                         else mixc(CLR["stroke"], CLR["strokeHover"], hm),
-                         in_rect, width=1, border_radius=7)
-        screen.set_clip(in_rect.inflate(-8, 0))
-        icy = in_rect.centery
-        if tts_text:
-            tsurf = T(f_val, tts_text, CLR["text"])
-            tx0 = in_rect.x + 10 + min(0, in_rect.w - 20 - tsurf.get_width())
-            screen.blit(tsurf, (tx0, icy - tsurf.get_height() // 2))
-            caret_x = tx0 + tsurf.get_width() + 2
-        else:
-            if not tts_focus:
-                ph = T(f_val, "Type - Enter saves, Shift+Enter speaks...",
-                       CLR["faint"])
-                screen.blit(ph, (in_rect.x + 10, icy - ph.get_height() // 2))
-            caret_x = in_rect.x + 10
-        if tts_focus and (now * 2.0) % 2 < 1:      # blinking caret
-            pygame.draw.line(screen, CLR["accent"],
-                             (caret_x, icy - 8), (caret_x, icy + 8))
-        screen.set_clip(None)
-        can_add = bool(tts_text.strip())
-        hm = q8(hover_step(("tts", "add"), add_rect.collidepoint(mouse_pos), dt))
-        if can_add:
-            pygame.draw.rect(screen, mixc(CLR["accent"], CLR["accentBright"], hm),
-                             add_rect, border_radius=7)
-            asurf = T(f_strip, "ADD", CLR["textOnAccent"])
-        else:
-            screen.blit(grad(add_rect.w, add_rect.h,
-                             mixc(CLR["raisedTop"], CLR["hoverTop"], hm),
-                             mixc(CLR["raisedBot"], CLR["hoverBot"], hm), 7),
-                        add_rect.topleft)
-            pygame.draw.rect(screen, mixc(CLR["stroke"], CLR["strokeHover"], hm),
-                             add_rect, width=1, border_radius=7)
-            asurf = T(f_strip, "ADD", CLR["muted"])
-        screen.blit(asurf, (add_rect.centerx - asurf.get_width() // 2,
-                            add_rect.centery - asurf.get_height() // 2))
-
-        # phrase list (scrollable; click = speak, x = delete)
-        n_ph = len(tts.phrases)
-        tts_content_h = (n_ph * (TTS_ROW_H + TTS_ROW_GAP) - TTS_ROW_GAP + 8
-                         if n_ph else 0)
-        tts_target = max(0.0, min(tts_target,
-                                  max(0.0, tts_content_h - TTS_LIST_RECT.height)))
-        tts_scroll = step(tts_scroll, tts_target, dt, 0.14)
-        screen.set_clip(TTS_LIST_RECT)
-        tts_row_hit.clear()
-        tts_del_hit.clear()
-        tts_playing = {}                   # row -> progress of speaking phrases
-        sample_row = {id(tts.samples[t]): i for i, t in enumerate(tts.phrases)
-                      if t in tts.samples}
-        for v in list(state.tts_voices):
-            try:
-                samples, cur, _fx = v
-            except Exception:
-                continue
-            ri = sample_row.get(id(samples))
-            if ri is not None and len(samples):
-                tts_playing[ri] = max(tts_playing.get(ri, 0.0), cur / len(samples))
-        if not n_ph:
-            hint = T(f_small, "(no phrases - type one above and press Enter)",
-                     CLR["faint"])
-            screen.blit(hint, (G_X, TTS_LIST_TOP + 8))
-        for i in range(n_ph):
-            ry = TTS_LIST_TOP - int(tts_scroll) + i * (TTS_ROW_H + TTS_ROW_GAP)
-            if ry + TTS_ROW_H < TTS_LIST_RECT.y or ry > VIEW_BOT:
-                continue
-            text = tts.phrases[i]
-            r = pygame.Rect(G_X, ry, G_RIGHT - G_X, TTS_ROW_H)
-            fl = tts.flash.get(i, 0) - now
-            f = q8(min(1.0, max(0.0, fl / 0.25)) ** 2) if fl > 0 else 0.0
-            hm = q8(hover_step(("ttsrow", i),
-                               r.collidepoint(mouse_pos)
-                               and TTS_LIST_RECT.collidepoint(mouse_pos), dt))
-            screen.blit(grad(r.w, TTS_ROW_H,
-                             mixc(mixc(CLR["raisedTop"], CLR["hoverTop"], hm),
-                                  CLR["accentDim"], f),
-                             mixc(mixc(CLR["raisedBot"], CLR["hoverBot"], hm),
-                                  CLR["accentDim"], f), 7),
-                        r.topleft)
-            prog = tts_playing.get(i)
-            bcol = mixc(CLR["stroke"], CLR["accentBright"], f)
-            if prog is not None and f < 0.05:
-                bcol = mixc(CLR["raisedTop"], CLR["accent"], 0.45)
-            elif hm > 0.4 and f < 0.05:
-                bcol = CLR["strokeHover"]
-            pygame.draw.rect(screen, bcol, r, width=1, border_radius=7)
-            dr = pygame.Rect(r.right - 8 - 18, r.centery - 9, 18, 18)
-            dh = q8(hover_step(("ttsdel", i), dr.collidepoint(mouse_pos), dt))
-            pygame.draw.rect(screen, mixc(CLR["strokeHover"], CLR["danger"], dh),
-                             dr, width=1, border_radius=5)
-            xs = T(f_badge, "x", CLR["danger"] if dh > 0.4 else CLR["muted"])
-            screen.blit(xs, (dr.centerx - xs.get_width() // 2,
-                             dr.centery - xs.get_height() // 2))
-            tts_del_hit[i] = dr
-            st = tts.status.get(text, "")
-            if st == "ready" and text in tts.samples:
-                dur = T(f_small, f"{len(tts.samples[text]) / SAMPLERATE:.1f}s",
-                        CLR["accent"] if prog is not None else CLR["faint"])
-            elif st == "error":
-                dur = T(f_small, "err", CLR["danger"])
-            else:                          # synthesizing: pulse like "loading"
-                a = 0.4 + 0.6 * (0.5 + 0.5 * float(np.sin(now * 2 * np.pi / 1.2)))
-                dur = T(f_small, "...", mixc(CLR["raisedBot"], CLR["muted"], q8(a)))
-            screen.blit(dur, (dr.x - 8 - dur.get_width(),
-                              r.centery - dur.get_height() // 2))
-            nm = tts_trunc.get(text)
-            if nm is None:
-                if len(tts_trunc) > 400:
-                    tts_trunc.clear()
-                nm, name_w = text, r.w - 104
-                if f_label.render(nm, True, CLR["text"]).get_width() > name_w:
-                    while nm and f_label.render(nm + "...", True,
-                                                CLR["text"]).get_width() > name_w:
-                        nm = nm[:-1]
-                    nm += "..."
-                tts_trunc[text] = nm
-            hot = prog is not None or f > 0.05
-            pygame.draw.polygon(screen,
-                                CLR["accent"] if hot else
-                                (CLR["muted"] if hm > 0.4 else CLR["faint"]),
-                                [(r.x + 12, r.centery - 4),
-                                 (r.x + 12, r.centery + 4), (r.x + 18, r.centery)])
-            ns = T(f_label, nm,
-                   CLR["text"] if (hot or hm > 0.4) else CLR["text2"])
-            screen.blit(ns, (r.x + 26, r.centery - ns.get_height() // 2))
-            if prog is not None:           # speaking: progress along bottom edge
-                pygame.draw.rect(screen, CLR["accent"],
-                                 pygame.Rect(r.x, r.bottom - 2,
-                                             max(2, int(r.w * min(1.0, prog))), 2))
-            tts_row_hit[i] = r
-        screen.blit(grad(TTS_LIST_RECT.width - 8, 20, (11, 13, 16, 0),
-                         (11, 13, 16, 255)),
-                    (TTS_LIST_RECT.x, VIEW_BOT - 20))
-        if tts_content_h > TTS_LIST_RECT.height:
-            track = pygame.Rect(WIN_W - 17, TTS_LIST_TOP + 2, 3,
-                                TTS_LIST_RECT.height - 4)
-            pygame.draw.rect(screen, CLR["scrollTrack"], track, border_radius=2)
-            th = max(18, int(track.height * TTS_LIST_RECT.height / tts_content_h))
-            tt_y = track.y + int((track.height - th)
-                                 * (tts_scroll / max(1.0, tts_content_h
-                                                     - TTS_LIST_RECT.height)))
-            pygame.draw.rect(screen, CLR["scrollThumb"],
-                             pygame.Rect(track.x, tt_y, 3, th), border_radius=2)
-        screen.set_clip(None)
+        dhint = T(f_small, f"drop audio files here · 1-9 fire page "
+                           f"{state.clip_page + 1}", CLR["faint"])
+        screen.blit(dhint, (sb_rect.x + PAD_X,
+                            sb_rect.bottom - 12 - dhint.get_height() // 2))
 
         # ------------------------------------------------------------ footer
         screen.blit(grad(WIN_W, FOOTER_H, CLR["footerTop"], CLR["footerBot"]),
@@ -1958,8 +2228,6 @@ def run_ui(state, stop_flag, dev_line, err_line="", monitor=None, board=None,
         pygame.draw.line(screen, CLR["strokeSoft"], (0, VIEW_BOT),
                          (WIN_W, VIEW_BOT))
         fy = VIEW_BOT + FOOTER_H // 2
-        # live values: the engine's device line changes when devices are
-        # switched from the menu
         cur_err = engine.error if engine is not None else err_line
         cur_dev = engine.dev_line if engine is not None else dev_line
         if cur_err:
@@ -1969,7 +2237,7 @@ def run_ui(state, stop_flag, dev_line, err_line="", monitor=None, board=None,
             fx = 14
             if "->" in cur_dev:
                 a_, b_ = cur_dev.split("->", 1)
-                parts = ((a_.strip(), CLR["muted"]), (" → ", CLR["accent"]),
+                parts = ((a_.strip(), CLR["muted"]), (" > ", CLR["accent"]),
                          (b_.strip(), CLR["muted"]))
             else:
                 parts = ((cur_dev, CLR["muted"]),)
@@ -1978,8 +2246,6 @@ def run_ui(state, stop_flag, dev_line, err_line="", monitor=None, board=None,
                 screen.blit(psur, (fx, fy - psur.get_height() // 2))
                 fx += psur.get_width()
 
-        # latency + underrun tally (right side; the status chip, which uses
-        # the same corner, takes precedence while it is up)
         chip_up = state.status_msg and (now - state.status_at) < 4.38
         if engine is not None and engine.latency_ms and not chip_up:
             stat = f"{engine.latency_ms:.0f} ms latency"
@@ -1990,7 +2256,6 @@ def run_ui(state, stop_flag, dev_line, err_line="", monitor=None, board=None,
             screen.blit(ss, (WIN_W - 14 - ss.get_width(),
                              fy - ss.get_height() // 2))
 
-        # status toast chip: in 160ms / hold 4s / out 220ms
         if state.status_msg:
             t_ = now - state.status_at
             alpha = (t_ / 0.16 if t_ < 0.16 else
@@ -1999,8 +2264,6 @@ def run_ui(state, stop_flag, dev_line, err_line="", monitor=None, board=None,
             if alpha > 0:
                 col = (CLR["danger"] if "error" in state.status_msg.lower()
                        else CLR["warning"])
-                # just the message: status_count is the underrun tally (shown
-                # as "N drops" in the footer), unrelated to most statuses
                 cs = T(f_foot, state.status_msg, col)
                 cw = cs.get_width() + 30
                 chip = pygame.Surface((cw, 20), pygame.SRCALPHA)
@@ -2019,7 +2282,7 @@ def run_ui(state, stop_flag, dev_line, err_line="", monitor=None, board=None,
             cap_lines = listener.caption_lines(now)
             if cap_lines:
                 key = (tuple(cap_lines), WIN_W)
-                if cap_cache["key"] != key:    # captions change rarely vs 60fps
+                if cap_cache["key"] != key:
                     ch = f_foot.get_height() + 6
                     panel_h = 10 + ch * len(cap_lines)
                     cap = pygame.Surface((WIN_W, panel_h), pygame.SRCALPHA)
@@ -2041,6 +2304,10 @@ def run_ui(state, stop_flag, dev_line, err_line="", monitor=None, board=None,
                                  cap_hit.topleft, cap_hit.topright)
 
         # --------------------------------------------- dropdown picker overlay
+        ui_debug["drop_info"] = None if drop is None else {
+            "rect": drop["rect"], "item_h": drop["item_h"],
+            "pad": drop["pad"], "scroll": drop["scroll"],
+            "n": len(drop["items"])}
         if drop is not None:
             r = drop["rect"]
             if (drop["edit"] is None and drop["mouse"] != mouse_pos
@@ -2066,7 +2333,6 @@ def run_ui(state, stop_flag, dev_line, err_line="", monitor=None, board=None,
                     continue
                 ed = drop["edit"]
                 if ed is not None and ed["i"] == i:
-                    # inline rename: empty box, the old name as placeholder
                     box = pygame.Rect(ir.x + 2, ir.centery - 11, ir.w - 4, 22)
                     screen.blit(grad(box.w, box.h, CLR["headerBot"],
                                      CLR["paneLeft"], 5), box.topleft)
@@ -2090,13 +2356,12 @@ def run_ui(state, stop_flag, dev_line, err_line="", monitor=None, board=None,
                                      ACCENT_TINT[1], 6), ir.topleft)
                     pygame.draw.rect(screen, CLR["accent"], ir,
                                      width=1, border_radius=6)
-                if i == drop["cur"]:           # the currently active entry
+                if i == drop["cur"]:
                     pygame.draw.circle(screen, CLR["accent"],
                                        (ir.x + 11, ir.centery), 2)
                 ns = T(f_labelF if i == drop["sel"] else f_label, nm,
                        CLR["text"] if i == drop["sel"] else CLR["text2"])
                 if drop["meta"][i]["mut"] and i == drop["sel"]:
-                    # focused editable row: keep the name clear of the x box
                     screen.set_clip(rows_clip.clip(
                         pygame.Rect(ir.x, ir.y, ir.w - 32, ir.h)))
                     screen.blit(ns, (ir.x + 22,
@@ -2117,7 +2382,7 @@ def run_ui(state, stop_flag, dev_line, err_line="", monitor=None, board=None,
                     screen.blit(ns, (ir.x + 22,
                                      ir.centery - ns.get_height() // 2))
             screen.set_clip(r.inflate(-2, -4))
-            if drop["hint_h"]:                 # pinned strip under the rows
+            if drop["hint_h"]:
                 hint = T(f_small, "right-click renames · x deletes",
                          CLR["faint"])
                 screen.blit(hint, (r.x + 12, r.bottom - drop["hint_h"]
@@ -2138,6 +2403,12 @@ def run_ui(state, stop_flag, dev_line, err_line="", monitor=None, board=None,
 
         pygame.display.flip()
         clock.tick(30)          # 30 fps is plenty for a menu and halves GIL load
+        frame_no += 1
+        if shot_path and frame_no >= shot_frames:
+            try:
+                pygame.image.save(screen, shot_path)
+            except Exception:
+                pass
+            stop_flag.set()
 
     pygame.quit()
-

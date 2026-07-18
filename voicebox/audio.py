@@ -52,6 +52,7 @@ def make_callback(state):
             reverb, echo, radio = state.reverb, state.echo, state.radio
             doubler, bass = state.doubler, state.bass
             ai_mute, tts_gain = state.ai_mute, state.tts_gain
+            trans_gain = state.trans_gain
             ai_fx = state.ai_fx
             mic_muted = state.mic_muted or state.trans_hold
             gate_on, gate_db = state.gate_on, state.gate_db
@@ -64,8 +65,10 @@ def make_callback(state):
                 state.tts_voices.clear()
             elif isinstance(ev, tuple) and ev[0] == "pitch":
                 state.shifter.set_semitones(ev[1])
-            elif isinstance(ev, tuple) and ev[0] == "tts":
-                state.tts_voices.append([ev[1], 0, bool(ev[2])])
+            elif isinstance(ev, tuple) and ev[0] in ("tts", "trans"):
+                # 4th field: which volume the entry follows - TTS phrases ride
+                # tts_gain, spoken translations ride their own trans_gain
+                state.tts_voices.append([ev[1], 0, bool(ev[2]), ev[0]])
             elif isinstance(ev, int):
                 # bind the list once: a rescan on the UI thread may swap
                 # state.clips between a len() check and the index
@@ -82,12 +85,14 @@ def make_callback(state):
             tts_pre = np.zeros(frames, dtype=np.float32)
             tts_post = np.zeros(frames, dtype=np.float32)
             still = []
-            for samples, cur, fx in state.tts_voices:
+            for samples, cur, fx, kind in state.tts_voices:
                 buf = tts_pre if (fx and not ai_mute) else tts_post
                 chunk = samples[cur:cur + frames]
-                buf[:len(chunk)] += chunk
+                # per-entry gain, applied live so the sliders act mid-phrase
+                buf[:len(chunk)] += chunk * (tts_gain if kind == "tts"
+                                             else trans_gain)
                 if cur + frames < len(samples):
-                    still.append([samples, cur + frames, fx])
+                    still.append([samples, cur + frames, fx, kind])
             state.tts_voices = still
 
         # x = the chain input; None = the voice path stays fully silent
@@ -115,7 +120,7 @@ def make_callback(state):
             carry = np.zeros(0, dtype=np.float32)
         else:
             if tts_pre is not None:
-                x = x + tts_pre * tts_gain
+                x = x + tts_pre           # entry gains already applied above
             y = state.shifter.process(x)
 
             y = np.concatenate([carry, y]) if len(carry) else y
@@ -165,7 +170,7 @@ def make_callback(state):
             state.voices = still
 
         if tts_post is not None:               # clean TTS joins after the chain
-            y += tts_post * tts_gain
+            y += tts_post                     # entry gains already applied above
 
         np.clip(y, -1.0, 1.0, out=y)          # prevent hard clipping distortion
         q = state.monitor_q                    # mirror to self-listen, if enabled

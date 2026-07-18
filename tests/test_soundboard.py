@@ -206,6 +206,12 @@ drop_dest_dir = Path(tempfile.mkdtemp())
 old_sounds_dir = voicebox.ui.SOUNDS_DIR
 voicebox.ui.SOUNDS_DIR = drop_dest_dir
 
+def ui_rect(kind, key):
+    """Center of a live hit-rect from the dashboard's debug registry."""
+    r = voicebox.ui.ui_debug.get(kind, {}).get(key)
+    return r.center if r else (0, 0)
+
+
 def poke():
     time.sleep(0.7)
     pygame.event.post(pygame.event.Event(pygame.DROPFILE, file=str(drop_src)))
@@ -213,16 +219,19 @@ def poke():
     for _ in range(3):
         pygame.event.post(pygame.event.Event(pygame.KEYDOWN, key=pygame.K_DOWN))
         time.sleep(0.01)
-    # grid button 0 lives at (400,118)+(176x56)
-    pygame.event.post(pygame.event.Event(pygame.MOUSEBUTTONDOWN, button=1, pos=(410, 130)))
+    # grid tile 0 (SOUNDBOARD card)
+    pygame.event.post(pygame.event.Event(pygame.MOUSEBUTTONDOWN, button=1,
+                                         pos=ui_rect("grid_hit", 0)))
     time.sleep(0.05)
     pygame.event.post(pygame.event.Event(pygame.KEYDOWN, key=pygame.K_3))
     time.sleep(0.05)
-    # strip "To mic" button lives at (400,70)
-    pygame.event.post(pygame.event.Event(pygame.MOUSEBUTTONDOWN, button=1, pos=(410, 80)))
+    # the TO MIC chip in the soundboard card header
+    pygame.event.post(pygame.event.Event(pygame.MOUSEBUTTONDOWN, button=1,
+                                         pos=ui_rect("strip_hit", "mic")))
     time.sleep(0.05)
-    # second grid button, now with to-mic off -> no mic event
-    pygame.event.post(pygame.event.Event(pygame.MOUSEBUTTONDOWN, button=1, pos=(590, 130)))
+    # second grid tile, now with to-mic off -> no mic event
+    pygame.event.post(pygame.event.Event(pygame.MOUSEBUTTONDOWN, button=1,
+                                         pos=ui_rect("grid_hit", 1)))
     time.sleep(0.05)
     pygame.event.post(pygame.event.Event(pygame.QUIT))
 

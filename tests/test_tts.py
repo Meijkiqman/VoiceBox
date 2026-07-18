@@ -217,11 +217,18 @@ stop_flag = threading.Event()
 snaps = []
 
 
+def ui_rect(kind, key):
+    """Center of a live hit-rect from the dashboard's debug registry."""
+    r = voicebox.ui.ui_debug.get(kind, {}).get(key)
+    return r.center if r else (0, 0)
+
+
 def poke():
     time.sleep(0.7)
     post = pygame.event.post
-    # click the TTS input box (spans x 384-872, y 448-478)
-    post(pygame.event.Event(pygame.MOUSEBUTTONDOWN, button=1, pos=(500, 462)))
+    # click the TTS input box (TEXT-TO-SPEECH card)
+    post(pygame.event.Event(pygame.MOUSEBUTTONDOWN, button=1,
+                            pos=ui_rect("tts_btn_hit", "input")))
     time.sleep(0.15)
     post(pygame.event.Event(pygame.TEXTINPUT, text="hi there"))
     # clip hotkey must NOT fire while typing
@@ -233,15 +240,18 @@ def poke():
     # Escape unfocuses the box but must NOT quit the app
     post(pygame.event.Event(pygame.KEYDOWN, key=pygame.K_ESCAPE))
     time.sleep(0.15)
-    # click phrase row 0 (rows start at y 486) -> speak it
-    post(pygame.event.Event(pygame.MOUSEBUTTONDOWN, button=1, pos=(500, 500)))
+    # click phrase row 0 -> speak it
+    post(pygame.event.Event(pygame.MOUSEBUTTONDOWN, button=1,
+                            pos=ui_rect("tts_row_hit", 0)))
     time.sleep(0.3)
-    # click the row's x (right edge, ~x 912-930) -> delete it
-    post(pygame.event.Event(pygame.MOUSEBUTTONDOWN, button=1, pos=(920, 501)))
+    # click the row's x -> delete it
+    post(pygame.event.Event(pygame.MOUSEBUTTONDOWN, button=1,
+                            pos=ui_rect("tts_del_hit", 0)))
     time.sleep(0.15)
     snaps.append(list(ui_bank.phrases))               # after delete
     # Ctrl+V pastes the (stubbed) clipboard into the box, Enter saves it
-    post(pygame.event.Event(pygame.MOUSEBUTTONDOWN, button=1, pos=(500, 462)))
+    post(pygame.event.Event(pygame.MOUSEBUTTONDOWN, button=1,
+                            pos=ui_rect("tts_btn_hit", "input")))
     time.sleep(0.15)
     post(pygame.event.Event(pygame.KEYDOWN, key=pygame.K_v,
                             mod=pygame.KMOD_CTRL))

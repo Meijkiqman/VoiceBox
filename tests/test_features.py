@@ -117,12 +117,13 @@ check("settings rows in order",
                  "Robot voice", "Helmet doubler",
                  "Grit / growl", "Reverb", "Echo", "Radio voice", "Bass boost",
                  "Voice volume", "Clip volume", "TTS voice FX", "TTS volume",
-                 "Sound cues", "Sounds to mic", "Pause sounds",
-                 "Stop all sounds", "Rescan sounds", "Quit"],
+                 "HEAR self-listen", "Sound cues", "Sounds to mic",
+                 "Pause sounds", "Stop all sounds", "Rescan sounds", "Quit"],
       str(labels))
-menu_nomon = voicebox.Menu(state, stop_flag)   # hear-myself lives in the strip
-check("menu rows identical without monitor",
-      [it.label for it in menu_nomon.items] == labels)
+menu_nomon = voicebox.Menu(state, stop_flag)   # no monitor = no HEAR row
+check("menu rows identical without monitor (minus HEAR)",
+      [it.label for it in menu_nomon.items]
+      == [l for l in labels if l != "HEAR self-listen"])
 
 # --------------------------------------------------------------- sound cues
 class CuePlayer:
@@ -152,6 +153,17 @@ while not state.events.empty():
     state.events.get_nowait()
 state.user_presets = []       # dropdown order below assumes built-ins only
 
+def ui_dbg():
+    return voicebox.ui.ui_debug
+
+
+def ui_row(name):
+    """Center of a menu row's live rect, located by label."""
+    d = ui_dbg()
+    r = d["row_hit"].get(d["labels"].index(name))
+    return r.center if r else (0, 0)
+
+
 def poke():
     time.sleep(0.7)
     for _ in range(6):
@@ -163,28 +175,47 @@ def poke():
     time.sleep(0.05)
     pygame.event.post(pygame.event.Event(pygame.VIDEORESIZE, w=960, h=660,
                                          size=(960, 660)))
-    # row 0 (Preset) sits at y 82-116 in the skinned layout (header + section)
-    pygame.event.post(pygame.event.Event(pygame.MOUSEMOTION, pos=(300, 95)))    # hover row 0
-    pygame.event.post(pygame.event.Event(pygame.MOUSEWHEEL, x=0, y=-1))         # wheel down
-    pygame.event.post(pygame.event.Event(pygame.MOUSEWHEEL, x=0, y=1))          # wheel up
-    pygame.event.post(pygame.event.Event(pygame.MOUSEMOTION, pos=(300, 95)))
+    time.sleep(0.1)
+    pygame.event.post(pygame.event.Event(pygame.MOUSEMOTION,
+                                         pos=ui_row("Preset")))
+    pygame.event.post(pygame.event.Event(pygame.MOUSEWHEEL, x=0, y=-1))
+    pygame.event.post(pygame.event.Event(pygame.MOUSEWHEEL, x=0, y=1))
+    time.sleep(0.1)
+    pygame.event.post(pygame.event.Event(pygame.MOUSEMOTION,
+                                         pos=ui_row("Preset")))
     time.sleep(0.05)
-    # click the Preset row -> alphabetical dropdown opens under it (y 120+)
-    pygame.event.post(pygame.event.Event(pygame.MOUSEBUTTONDOWN, button=1, pos=(300, 95)))
-    time.sleep(0.05)
+    # click the Preset row -> alphabetical dropdown opens anchored to it
+    pygame.event.post(pygame.event.Event(pygame.MOUSEBUTTONDOWN, button=1,
+                                         pos=ui_row("Preset")))
+    time.sleep(0.1)
     # first item = "Chipmunk" (alphabetical); picking it applies the preset
-    pygame.event.post(pygame.event.Event(pygame.MOUSEBUTTONDOWN, button=1, pos=(150, 138)))
-    pygame.event.post(pygame.event.Event(pygame.MOUSEBUTTONDOWN, button=1, pos=(300, 2)))  # above list: ignored
+    di = ui_dbg().get("drop_info")
+    if di:
+        pos0 = (di["rect"].x + 30,
+                di["rect"].y + di["pad"] - int(di["scroll"])
+                + di["item_h"] // 2)
+        pygame.event.post(pygame.event.Event(pygame.MOUSEBUTTONDOWN,
+                                             button=1, pos=pos0))
+    pygame.event.post(pygame.event.Event(pygame.MOUSEBUTTONDOWN, button=1,
+                                         pos=(300, 2)))   # header: ignored
     time.sleep(0.1)
     snaps.append(state.preset_label())               # before slider tweaks
-    # Reverb slider (row 8, y 400-434): track spans x 158-280; drag to the end
-    pygame.event.post(pygame.event.Event(pygame.MOUSEBUTTONDOWN, button=1, pos=(228, 417)))
+    # Reverb slider: jump-click the track, then drag past the right end
+    tr = ui_dbg()["slider_track"].get(ui_dbg()["labels"].index("Reverb"))
+    if tr:
+        pygame.event.post(pygame.event.Event(pygame.MOUSEBUTTONDOWN, button=1,
+                                             pos=tr.center))
+        time.sleep(0.05)
+        pygame.event.post(pygame.event.Event(pygame.MOUSEMOTION,
+                                             pos=(tr.right + 60, tr.centery)))
+        pygame.event.post(pygame.event.Event(pygame.MOUSEBUTTONUP, button=1,
+                                             pos=(tr.right + 60, tr.centery)))
     time.sleep(0.05)
-    pygame.event.post(pygame.event.Event(pygame.MOUSEMOTION, pos=(348, 417)))
-    pygame.event.post(pygame.event.Event(pygame.MOUSEBUTTONUP, button=1, pos=(348, 417)))
-    time.sleep(0.05)
-    # Echo (row 9, y 436-470): click the number, type an exact value
-    pygame.event.post(pygame.event.Event(pygame.MOUSEBUTTONDOWN, button=1, pos=(335, 453)))
+    # Echo: click the number, type an exact value
+    vr = ui_dbg()["value_hit"].get(ui_dbg()["labels"].index("Echo"))
+    if vr:
+        pygame.event.post(pygame.event.Event(pygame.MOUSEBUTTONDOWN, button=1,
+                                             pos=vr.center))
     time.sleep(0.05)
     pygame.event.post(pygame.event.Event(pygame.TEXTINPUT, text="42"))
     time.sleep(0.05)
@@ -226,24 +257,11 @@ class FakeMonitor:
 fmon = FakeMonitor()
 stop_flag = threading.Event()
 
-def hear_button_center():
-    """Replicate run_ui's strip layout math to locate the HEAR button."""
-    f = pygame.font.Font(
-        str(voicebox.BASE_DIR / "assets" / "fonts" / "JetBrainsMono-Bold.ttf"),
-        11)
-    x = 384                                                 # G_X
-    for lab, active in [
-            ("TO MIC: ON" if state.clips_to_mic else "TO MIC: OFF",
-             state.clips_to_mic),
-            ("PAUSED" if state.clips_paused else "PAUSE", state.clips_paused),
-            ("STOP", False)]:
-        x += f.size(lab)[0] + 24 + (12 if active else 0) + 8
-    return x + 10, 62 + 15                                  # STRIP_Y + H/2
-
 def poke_hear():
     time.sleep(0.7)
+    # HEAR lives in the SYSTEM card now; the debug registry finds its row
     pygame.event.post(pygame.event.Event(pygame.MOUSEBUTTONDOWN, button=1,
-                                         pos=hear_button_center()))
+                                         pos=ui_row("HEAR self-listen")))
     time.sleep(0.1)
     pygame.event.post(pygame.event.Event(pygame.QUIT))
 
