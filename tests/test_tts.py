@@ -310,6 +310,45 @@ while not ui_state.events.empty():
 check("row click spoke the phrase to the mic", len(tts_events) >= 1)
 check("clip hotkeys gated while typing", int_events == [])
 
+# ----------------------------------------- voice picker dropdown (>3 options)
+ui_state2 = voicebox.State()
+bank2 = voicebox.TTSBank(ui_state2, path=Path(tempfile.mkdtemp()) / "p.json")
+bank2.voice_names = ["Gamma", "Alpha", "Delta", "Beta"]
+bank2._voices_kicked = True                  # keep the stub list as-is
+stop2 = threading.Event()
+sess0 = voicebox.ui.ui_debug.get("session", 0)
+
+
+def poke2():
+    from _common import wait_ui
+    dbg = voicebox.ui.ui_debug
+    # rects from the PREVIOUS run_ui session linger until this one draws:
+    # wait for the fresh session before trusting any of them
+    wait_ui(lambda: dbg.get("session", 0) > sess0)
+    wait_ui(lambda: dbg["row_hit"].get(dbg["labels"].index("TTS voice")))
+    r = dbg["row_hit"][dbg["labels"].index("TTS voice")]
+    inject(pygame.event.Event(pygame.MOUSEBUTTONDOWN, button=1, pos=r.center))
+    wait_ui(lambda: dbg.get("drop_info"))
+    di = dbg["drop_info"]
+    if di:   # sorted list: default, Alpha, Beta, Delta, Gamma -> Beta row 2
+        pos = (di["rect"].x + 30, di["rect"].y + di["pad"] - int(di["scroll"])
+               + di["item_h"] * 2 + di["item_h"] // 2)
+        inject(pygame.event.Event(pygame.MOUSEBUTTONDOWN, button=1, pos=pos))
+    wait_ui(lambda: ui_state2.tts_voice == "Beta", timeout=3.0)
+    inject(pygame.event.Event(pygame.QUIT))
+
+
+threading.Thread(target=poke2, daemon=True).start()
+ui_error = []
+try:
+    voicebox.run_ui(ui_state2, stop2, "dev", "", None, None, None, bank2)
+except Exception as e:
+    ui_error.append(e)
+check("voice picker UI survives", not ui_error,
+      repr(ui_error[0]) if ui_error else "")
+check(">3 options pick from a dropdown", ui_state2.tts_voice == "Beta",
+      str(ui_state2.tts_voice))
+
 # ---------------------------------------------------------- voice + rate
 p1 = voicebox.tts_cache_path("hello")
 check("cache path is stable", p1 == voicebox.tts_cache_path("hello"))

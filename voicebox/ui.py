@@ -932,7 +932,8 @@ def run_ui(state, stop_flag, dev_line, err_line="", monitor=None, board=None,
                     tts_btn_hit=tts_btn_hit, slider_track=slider_track,
                     value_hit=value_hit,
                     labels=[it.label for it in menu.items], drop_info=None,
-                    sys_hit=sys_hit)
+                    sys_hit=sys_hit,
+                    session=ui_debug.get("session", 0) + 1)
 
     def step(cur, target, dt, dur):
         if dur <= 0:
@@ -1337,9 +1338,67 @@ def run_ui(state, stop_flag, dev_line, err_line="", monitor=None, board=None,
         screen.set_clip(cards_area)
         return list_top + TTS_LIST_H + 8
 
-    # ------------------------------ dropdown picker (Scene / Preset / AI voice)
-    DROP_ROWS = ("Scene", "Preset", "AI character")
+    # --------------------------------------------------- dropdown picker
+    # Every selector with more than three alternatives opens a picker
+    # (Scene/Preset/AI character are editable lists; the rest are plain
+    # pick-one lists). Three or fewer - Translate from/to - keep < >.
+    DROP_ROWS = ("Scene", "Preset", "AI character", "TTS voice",
+                 "Translate voice", "Listen device", "Input device",
+                 "Output device")
     drop = None
+
+    def _pick_list(label):
+        """(display_names, options, current, apply) for the plain lists."""
+        if label == "TTS voice" and tts is not None:
+            names = sorted(tts.voice_names or [], key=str.lower)
+            if not names:
+                return None            # still listing in the background
+            opts = [None] + names
+
+            def apply(v):
+                with state.lock:
+                    state.tts_voice = v
+                tts.invalidate()
+            return (["default"] + names, opts, state.tts_voice, apply)
+        if label == "Translate voice" and translator is not None:
+            names = sorted(translator.voice_names or [], key=str.lower)
+            if not names:
+                return None
+            opts = [None] + names
+            attr = "trans_voice_" + translator.target()
+
+            def apply(v):
+                with state.lock:
+                    setattr(state, attr, v)
+            return (["auto"] + names, opts, getattr(state, attr, None), apply)
+        if label == "Listen device" and listener is not None:
+            opts = listener.device_options()
+            if len(opts) < 2:
+                return None
+
+            def apply(v):
+                with state.lock:
+                    state.listen_device = v
+                if listener.on:        # live switch, same as cycle_device
+                    listener.stop()
+                    listener.start()
+            return (["auto"] + [str(o) for o in opts[1:]], opts,
+                    state.listen_device, apply)
+        if label in ("Input device", "Output device") and engine is not None:
+            kindd = "input" if label == "Input device" else "output"
+            opts = engine.options(kindd)
+            if len(opts) < 2:
+                return None
+
+            def apply(v, kindd=kindd):
+                with state.lock:
+                    setattr(state, kindd + "_device", v)
+                if not engine.open():
+                    state.status_msg = engine.error
+                    state.status_at = time.time()
+            return (["default"] + [str(o) for o in opts[1:]], opts,
+                    getattr(state, kindd + "_device"), apply)
+        return None
 
     def open_dropdown(row_idx):
         nonlocal drop
@@ -1376,6 +1435,16 @@ def run_ui(state, stop_flag, dev_line, err_line="", monitor=None, board=None,
             kind = "scene"
             cur = next((k for k, (_nm, i) in enumerate(entries)
                         if i == scenes.sel), 0)
+        elif (pl := _pick_list(label)) is not None:
+            disp, opts, current, apply = pl
+            items = [(nm, lambda v=v: apply(v)) for nm, v in zip(disp, opts)]
+            meta = [{"orig": k, "mut": False} for k in range(len(opts))]
+            kind = "list"
+            cur = opts.index(current) if current in opts else 0
+        elif label in DROP_ROWS:
+            state.status_msg = f"{label}: still listing options - try again"
+            state.status_at = time.time()
+            return
         else:
             return
         # anchored to the row's on-screen rect (cards move; rects are truth)
@@ -1743,7 +1812,10 @@ def run_ui(state, stop_flag, dev_line, err_line="", monitor=None, board=None,
                     st_ = stop_of.get(("row", sy))
                     if st_ is not None:
                         fsel = st_
-                    menu.on_select()
+                    if menu.items[sy].label in DROP_ROWS:
+                        open_dropdown(sy)    # device chips pick from a list
+                    else:
+                        menu.on_select()
                 elif (hk := next((k for k, r in hdr_hit.items()
                                   if r.collidepoint(event.pos)), None)) is not None:
                     if ("hdr", hk) in stop_of:
