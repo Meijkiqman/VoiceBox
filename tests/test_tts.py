@@ -210,6 +210,13 @@ fx_row.select()
 # ------------------------------------------------------------- UI panel smoke
 import pygame
 
+
+def inject(ev):
+    """Hand a synthetic event to run_ui's main-thread hook -
+    cross-thread pygame.event.post corrupts the SDL queue."""
+    from collections import deque
+    voicebox.ui.ui_debug.setdefault("inject", deque()).append(ev)
+
 ui_state = voicebox.State()
 ui_tmp = Path(tempfile.mkdtemp()) / "phrases.json"
 ui_bank = voicebox.TTSBank(ui_state, path=ui_tmp)
@@ -224,7 +231,8 @@ def ui_rect(kind, key):
 
 
 def poke():
-    time.sleep(0.7)
+    from _common import wait_ui
+    wait_ui(lambda: ui_rect("tts_btn_hit", "input") != (0, 0))
     post = pygame.event.post
     # click the TTS input box (TEXT-TO-SPEECH card)
     post(pygame.event.Event(pygame.MOUSEBUTTONDOWN, button=1,
@@ -241,6 +249,8 @@ def poke():
     post(pygame.event.Event(pygame.KEYDOWN, key=pygame.K_ESCAPE))
     time.sleep(0.15)
     # click phrase row 0 -> speak it
+    from _common import wait_ui as _w
+    _w(lambda: ui_rect("tts_row_hit", 0) != (0, 0))
     post(pygame.event.Event(pygame.MOUSEBUTTONDOWN, button=1,
                             pos=ui_rect("tts_row_hit", 0)))
     time.sleep(0.3)

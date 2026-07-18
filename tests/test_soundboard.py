@@ -193,6 +193,13 @@ check("quiet clips boosted at most 4x",
 
 # ------------------------------------------------------------- grid UI smoke
 import pygame
+
+
+def inject(ev):
+    """Hand a synthetic event to run_ui's main-thread hook -
+    cross-thread pygame.event.post corrupts the SDL queue."""
+    from collections import deque
+    voicebox.ui.ui_debug.setdefault("inject", deque()).append(ev)
 with state.lock:
     state.clips_to_mic = True
 drain_ints()
@@ -213,27 +220,28 @@ def ui_rect(kind, key):
 
 
 def poke():
-    time.sleep(0.7)
-    pygame.event.post(pygame.event.Event(pygame.DROPFILE, file=str(drop_src)))
+    from _common import wait_ui
+    wait_ui(lambda: ui_rect("grid_hit", 0) != (0, 0))
+    inject(pygame.event.Event(pygame.DROPFILE, file=str(drop_src)))
     time.sleep(0.1)
     for _ in range(3):
-        pygame.event.post(pygame.event.Event(pygame.KEYDOWN, key=pygame.K_DOWN))
+        inject(pygame.event.Event(pygame.KEYDOWN, key=pygame.K_DOWN))
         time.sleep(0.01)
     # grid tile 0 (SOUNDBOARD card)
-    pygame.event.post(pygame.event.Event(pygame.MOUSEBUTTONDOWN, button=1,
+    inject(pygame.event.Event(pygame.MOUSEBUTTONDOWN, button=1,
                                          pos=ui_rect("grid_hit", 0)))
     time.sleep(0.05)
-    pygame.event.post(pygame.event.Event(pygame.KEYDOWN, key=pygame.K_3))
+    inject(pygame.event.Event(pygame.KEYDOWN, key=pygame.K_3))
     time.sleep(0.05)
     # the TO MIC chip in the soundboard card header
-    pygame.event.post(pygame.event.Event(pygame.MOUSEBUTTONDOWN, button=1,
+    inject(pygame.event.Event(pygame.MOUSEBUTTONDOWN, button=1,
                                          pos=ui_rect("strip_hit", "mic")))
     time.sleep(0.05)
     # second grid tile, now with to-mic off -> no mic event
-    pygame.event.post(pygame.event.Event(pygame.MOUSEBUTTONDOWN, button=1,
+    inject(pygame.event.Event(pygame.MOUSEBUTTONDOWN, button=1,
                                          pos=ui_rect("grid_hit", 1)))
     time.sleep(0.05)
-    pygame.event.post(pygame.event.Event(pygame.QUIT))
+    inject(pygame.event.Event(pygame.QUIT))
 
 threading.Thread(target=poke, daemon=True).start()
 ui_error = []

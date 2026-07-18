@@ -256,6 +256,13 @@ import time
 
 import pygame
 
+
+def inject(ev):
+    """Hand a synthetic event to run_ui's main-thread hook -
+    cross-thread pygame.event.post corrupts the SDL queue."""
+    from collections import deque
+    voicebox.ui.ui_debug.setdefault("inject", deque()).append(ev)
+
 ui_state = voicebox.State()
 ui_sc = voicebox.Scenes(ui_state, None, None,
                         path=Path(tempfile.mkdtemp()) / "ui.json")
@@ -266,33 +273,40 @@ snaps = []
 
 
 def key(k):
-    pygame.event.post(pygame.event.Event(pygame.KEYDOWN, key=k))
-    pygame.event.post(pygame.event.Event(pygame.KEYUP, key=k))
-    time.sleep(0.1)
+    inject(pygame.event.Event(pygame.KEYDOWN, key=k))
+    inject(pygame.event.Event(pygame.KEYUP, key=k))
+    time.sleep(0.2)
 
 
 def poke():
-    time.sleep(0.7)
-    key(pygame.K_RETURN)                     # Scene row -> dropdown opens
+    from _common import wait_ui
+    dbg = voicebox.ui.ui_debug
+    # focus starts on the scene chip; wait for its rect (first frames)
+    wait_ui(lambda: dbg["row_hit"].get(dbg["labels"].index("Scene")))
+    key(pygame.K_RETURN)                     # Scene chip -> dropdown opens
+    wait_ui(lambda: dbg.get("drop_info"))
     key(pygame.K_F2)                         # rename the focused entry
-    pygame.event.post(pygame.event.Event(pygame.TEXTINPUT, text="zulu"))
-    time.sleep(0.1)
+    inject(pygame.event.Event(pygame.TEXTINPUT, text="zulu"))
+    time.sleep(0.2)
     key(pygame.K_RETURN)                     # commit the new name
+    wait_ui(lambda: "zulu" in ui_sc.names(), timeout=3.0)
     snaps.append(list(ui_sc.names()))
     key(pygame.K_ESCAPE)                     # close the picker
     key(pygame.K_RETURN)                     # reopen: still on the renamed one
+    wait_ui(lambda: dbg.get("drop_info"))
     key(pygame.K_DELETE)                     # delete it
+    wait_ui(lambda: "zulu" not in ui_sc.names(), timeout=3.0)
     snaps.append(list(ui_sc.names()))
     # a mouse-wheel tick also arrives as a legacy button-4/5 press on
     # Windows: it must scroll the picker, never close it
-    pygame.event.post(pygame.event.Event(pygame.MOUSEBUTTONDOWN, button=5,
+    inject(pygame.event.Event(pygame.MOUSEBUTTONDOWN, button=5,
                                          pos=(150, 138)))
-    pygame.event.post(pygame.event.Event(pygame.MOUSEWHEEL, x=0, y=-1))
+    inject(pygame.event.Event(pygame.MOUSEWHEEL, x=0, y=-1))
     time.sleep(0.1)
     key(pygame.K_RETURN)                     # picker still open: picks "beta"
     snaps.append(ui_sc.applied)
     key(pygame.K_ESCAPE)
-    pygame.event.post(pygame.event.Event(pygame.QUIT))
+    inject(pygame.event.Event(pygame.QUIT))
 
 
 threading.Thread(target=poke, daemon=True).start()

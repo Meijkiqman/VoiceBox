@@ -2,6 +2,7 @@
 Skin ported from design/VoiceBox Skin.dc.html - see run_ui's docstring."""
 import shutil
 import time
+from collections import deque
 from pathlib import Path
 
 import numpy as np
@@ -190,7 +191,7 @@ class Menu:
                 adjust=self._adjust_tts_rate))
         if translator is not None:
             self.items.append(MenuItem(
-                "Continuous translate",
+                "Auto translate",
                 lambda: "ON" if translator.auto else "off",
                 select=translator.toggle_auto,
                 adjust=lambda d: translator.toggle_auto()))
@@ -698,7 +699,7 @@ def run_ui(state, stop_flag, dev_line, err_line="", monitor=None, board=None,
 
     CARD_DEFS = [
         card("translator", "TRANSLATOR",
-             _rows("Continuous translate", "Translate", "Translate from",
+             _rows("Auto translate", "Translate", "Translate from",
                    "Translate to", "Translate voice", "Translate volume"),
              dot=(lambda: translator.auto) if translator else None,
              summary=(lambda: f"{translator.source().upper()} > "
@@ -856,6 +857,7 @@ def run_ui(state, stop_flag, dev_line, err_line="", monitor=None, board=None,
         cards_area = pygame.Rect(0, CARD_TOP, SB_X - COL_GAP // 2,
                                  VIEW_BOT - CARD_TOP)
         TILE_W = (SB_W - 2 * PAD_X - GGAP * (COLS - 1)) // COLS
+        ui_debug["win"] = (WIN_W, WIN_H)   # tests wait on this after resizes
         build_layout()
         rebuild_grid()
 
@@ -1539,13 +1541,27 @@ def run_ui(state, stop_flag, dev_line, err_line="", monitor=None, board=None,
 
     relayout()
 
+    # test hook: events appended here are handled on the MAIN thread each
+    # frame. The headless suites use this instead of pygame.event.post -
+    # posting attribute-carrying events from another thread makes pygame
+    # free the event dict while SDL still holds it (use-after-free).
+    inject_q = ui_debug.setdefault("inject", deque())
+
+    def drain_inject():
+        evs = []
+        while True:
+            try:
+                evs.append(inject_q.popleft())
+            except IndexError:
+                return evs
+
     # ================================================================== loop
     while not stop_flag.is_set():
         now = time.time()
         dt = min(0.1, now - last_t)
         last_t = now
 
-        for event in pygame.event.get():
+        for event in list(pygame.event.get()) + drain_inject():
             if event.type == pygame.QUIT:
                 stop_flag.set()
 

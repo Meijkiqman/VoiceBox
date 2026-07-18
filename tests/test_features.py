@@ -149,6 +149,13 @@ state.cues = None
 
 # ------------------------------------------------------- UI smoke incl. mouse
 import pygame
+
+
+def inject(ev):
+    """Hand a synthetic event to run_ui's main-thread hook -
+    cross-thread pygame.event.post corrupts the SDL queue."""
+    from collections import deque
+    voicebox.ui.ui_debug.setdefault("inject", deque()).append(ev)
 while not state.events.empty():
     state.events.get_nowait()
 state.user_presets = []       # dropdown order below assumes built-ins only
@@ -165,63 +172,65 @@ def ui_row(name):
 
 
 def poke():
-    time.sleep(0.7)
+    from _common import wait_ui
+    wait_ui(lambda: ui_row("Preset") != (0, 0))
     for _ in range(6):
-        pygame.event.post(pygame.event.Event(pygame.KEYDOWN, key=pygame.K_DOWN))
+        inject(pygame.event.Event(pygame.KEYDOWN, key=pygame.K_DOWN))
         time.sleep(0.01)
-    # resizable window: grow + restore must relayout without crashing
-    pygame.event.post(pygame.event.Event(pygame.VIDEORESIZE, w=1160, h=780,
-                                         size=(1160, 780)))
-    time.sleep(0.05)
-    pygame.event.post(pygame.event.Event(pygame.VIDEORESIZE, w=960, h=660,
-                                         size=(960, 660)))
-    time.sleep(0.1)
-    pygame.event.post(pygame.event.Event(pygame.MOUSEMOTION,
+    # NOTE: no synthetic VIDEORESIZE here. Posting one from another thread
+    # makes pygame free the event's attribute dict while set_mode flushes
+    # the queue (use-after-free -> SIGSEGV in dict_from_event). Real OS
+    # resizes are SDL-native and safe; wide-window relayout is covered by
+    # the separate 1160x780 session below.
+    inject(pygame.event.Event(pygame.MOUSEMOTION,
                                          pos=ui_row("Preset")))
-    pygame.event.post(pygame.event.Event(pygame.MOUSEWHEEL, x=0, y=-1))
-    pygame.event.post(pygame.event.Event(pygame.MOUSEWHEEL, x=0, y=1))
+    inject(pygame.event.Event(pygame.MOUSEWHEEL, x=0, y=-1))
+    inject(pygame.event.Event(pygame.MOUSEWHEEL, x=0, y=1))
     time.sleep(0.1)
-    pygame.event.post(pygame.event.Event(pygame.MOUSEMOTION,
+    inject(pygame.event.Event(pygame.MOUSEMOTION,
                                          pos=ui_row("Preset")))
     time.sleep(0.05)
     # click the Preset row -> alphabetical dropdown opens anchored to it
-    pygame.event.post(pygame.event.Event(pygame.MOUSEBUTTONDOWN, button=1,
+    wait_ui(lambda: ui_row("Preset") != (0, 0))
+    inject(pygame.event.Event(pygame.MOUSEBUTTONDOWN, button=1,
                                          pos=ui_row("Preset")))
-    time.sleep(0.1)
+    wait_ui(lambda: ui_dbg().get("drop_info"))
     # first item = "Chipmunk" (alphabetical); picking it applies the preset
     di = ui_dbg().get("drop_info")
     if di:
         pos0 = (di["rect"].x + 30,
                 di["rect"].y + di["pad"] - int(di["scroll"])
                 + di["item_h"] // 2)
-        pygame.event.post(pygame.event.Event(pygame.MOUSEBUTTONDOWN,
+        inject(pygame.event.Event(pygame.MOUSEBUTTONDOWN,
                                              button=1, pos=pos0))
-    pygame.event.post(pygame.event.Event(pygame.MOUSEBUTTONDOWN, button=1,
+    inject(pygame.event.Event(pygame.MOUSEBUTTONDOWN, button=1,
                                          pos=(300, 2)))   # header: ignored
-    time.sleep(0.1)
+    wait_ui(lambda: state.preset_label() == "Chipmunk", timeout=3.0)
     snaps.append(state.preset_label())               # before slider tweaks
     # Reverb slider: jump-click the track, then drag past the right end
+    wait_ui(lambda: ui_dbg()["slider_track"].get(
+        ui_dbg()["labels"].index("Reverb")))
     tr = ui_dbg()["slider_track"].get(ui_dbg()["labels"].index("Reverb"))
     if tr:
-        pygame.event.post(pygame.event.Event(pygame.MOUSEBUTTONDOWN, button=1,
+        inject(pygame.event.Event(pygame.MOUSEBUTTONDOWN, button=1,
                                              pos=tr.center))
         time.sleep(0.05)
-        pygame.event.post(pygame.event.Event(pygame.MOUSEMOTION,
+        inject(pygame.event.Event(pygame.MOUSEMOTION,
                                              pos=(tr.right + 60, tr.centery)))
-        pygame.event.post(pygame.event.Event(pygame.MOUSEBUTTONUP, button=1,
+        inject(pygame.event.Event(pygame.MOUSEBUTTONUP, button=1,
                                              pos=(tr.right + 60, tr.centery)))
-    time.sleep(0.05)
+    wait_ui(lambda: state.reverb == 1.0, timeout=3.0)
     # Echo: click the number, type an exact value
     vr = ui_dbg()["value_hit"].get(ui_dbg()["labels"].index("Echo"))
     if vr:
-        pygame.event.post(pygame.event.Event(pygame.MOUSEBUTTONDOWN, button=1,
+        inject(pygame.event.Event(pygame.MOUSEBUTTONDOWN, button=1,
                                              pos=vr.center))
-    time.sleep(0.05)
-    pygame.event.post(pygame.event.Event(pygame.TEXTINPUT, text="42"))
-    time.sleep(0.05)
-    pygame.event.post(pygame.event.Event(pygame.KEYDOWN, key=pygame.K_RETURN))
-    time.sleep(0.05)
-    pygame.event.post(pygame.event.Event(pygame.QUIT))
+    time.sleep(0.15)
+    inject(pygame.event.Event(pygame.TEXTINPUT, text="42"))
+    time.sleep(0.15)
+    inject(pygame.event.Event(pygame.KEYDOWN, key=pygame.K_RETURN))
+    wait_ui(lambda: abs(state.echo - 0.42) < 1e-9, timeout=3.0)
+    inject(pygame.event.Event(pygame.QUIT))
 
 snaps = []
 
@@ -258,12 +267,13 @@ fmon = FakeMonitor()
 stop_flag = threading.Event()
 
 def poke_hear():
-    time.sleep(0.7)
+    from _common import wait_ui
     # HEAR lives in the SYSTEM card now; the debug registry finds its row
-    pygame.event.post(pygame.event.Event(pygame.MOUSEBUTTONDOWN, button=1,
+    wait_ui(lambda: ui_row("HEAR self-listen") != (0, 0))
+    inject(pygame.event.Event(pygame.MOUSEBUTTONDOWN, button=1,
                                          pos=ui_row("HEAR self-listen")))
-    time.sleep(0.1)
-    pygame.event.post(pygame.event.Event(pygame.QUIT))
+    wait_ui(lambda: fmon.on, timeout=3.0)
+    inject(pygame.event.Event(pygame.QUIT))
 
 threading.Thread(target=poke_hear, daemon=True).start()
 ui_error = []
@@ -274,5 +284,25 @@ except Exception as e:
 check("UI with HEAR strip button survives", not ui_error,
       repr(ui_error[0]) if ui_error else "")
 check("HEAR strip click toggled self-listen", fmon.on is True)
+
+# ------------------------------------------- wide-window relayout coverage
+# a short self-quitting session at 1160x780 via the screenshot hook: the
+# card columns must lay out and render at the bigger size too
+import os
+import tempfile
+from pathlib import Path
+
+shot = Path(tempfile.mkdtemp()) / "wide.png"
+os.environ["VOICEBOX_SHOT"] = f"{shot}@1160x780:6"
+ui_error = []
+try:
+    voicebox.run_ui(state, threading.Event(), "dev", "", None)
+except Exception as e:
+    ui_error.append(e)
+finally:
+    os.environ.pop("VOICEBOX_SHOT", None)
+check("wide-window relayout survives", not ui_error,
+      repr(ui_error[0]) if ui_error else "")
+check("wide-window frame rendered", shot.is_file() and shot.stat().st_size > 0)
 
 finish()

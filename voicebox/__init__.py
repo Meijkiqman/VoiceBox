@@ -56,7 +56,8 @@ the AI voice while the RVC worker is live; off = clean TTS.
 
 SPEECH TRANSLATOR
 -----------------
-Flip the TRANS strip chip (next to HEAR) and just talk: each sentence
+Flip the Auto translate row at the top of the TRANSLATOR card and just
+talk: each sentence
 ends itself on trailing silence, and your raw voice never reaches the
 cable while it is on. Ctrl+Alt+T (or the Translate row) does a one-shot
 capture instead. Speech is transcribed (faster-whisper), translated

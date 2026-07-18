@@ -21,6 +21,16 @@ except Exception:
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
+# The voice-list runs `espeak --voices` on a background thread; vfork-ing
+# a (missing) binary while the main thread is inside SDL corrupts the
+# parent heap in this container and segfaults at random later points.
+# The tests never need real OS voices - stub the subprocess away globally.
+try:
+    import voicebox.tts as _tts_mod
+    _tts_mod.list_tts_voices = lambda: []
+except Exception:
+    pass
+
 FAILURES = []
 
 
@@ -29,6 +39,21 @@ def check(name, cond, detail=""):
           + (f"  ({detail})" if detail and not cond else ""))
     if not cond:
         FAILURES.append(name)
+
+
+def wait_ui(cond, timeout=6.0, step=0.05):
+    """Poll until cond() is truthy - for the run_ui poke threads, which
+    must not race the render loop's first frames on a loaded machine."""
+    import time
+    t0 = time.time()
+    while time.time() - t0 < timeout:
+        try:
+            if cond():
+                return True
+        except Exception:
+            pass
+        time.sleep(step)
+    return False
 
 
 def finish():

@@ -15,9 +15,10 @@ import time
 import numpy as np
 from scipy.signal import resample_poly
 
-from .config import (BLOCKSIZE, SAMPLERATE, TRANS_AUTO_STOP_S, TRANS_IDLE_S,
-                     TRANS_MAX_S, TRANS_MIN_S, TRANS_MODEL, TRANS_SPEECH_DB,
-                     TRANS_SOURCES, TRANS_TARGETS)
+from .config import (BLOCKSIZE, SAMPLERATE, TRANS_AUTO_STOP_S,
+                     TRANS_FLOOR_DB, TRANS_FLOOR_MAX, TRANS_IDLE_S,
+                     TRANS_MAX_S, TRANS_MIN_S, TRANS_MODEL, TRANS_SOURCES,
+                     TRANS_TARGETS, TRANS_VAD_KEEP, TRANS_VAD_START)
 from .tts import tts_synthesize
 
 # Whisper reports ISO codes; Argos wants "nb" for Norwegian (Bokmål - "nn"
@@ -201,21 +202,31 @@ class Translator:
 
     def _auto_stop(self, tap):
         """Watch the mic meter while capturing: once speech has been heard,
-        TRANS_AUTO_STOP_S of silence ends the capture as if the user tapped
-        again; TRANS_IDLE_S with no speech at all gives up. Exits quietly
-        the moment a manual tap (or a newer capture) takes over."""
-        thresh = 10.0 ** (TRANS_SPEECH_DB / 20.0)
+        TRANS_AUTO_STOP_S of quiet ends the capture as if the user tapped
+        again; TRANS_IDLE_S with no speech at all gives up (one-shot mode).
+
+        Speech detection is adaptive: the watcher tracks the mic's noise
+        floor - falling to a quieter reading instantly, rising only ~3 dB/s
+        - and treats TRANS_VAD_START dB above that floor as speech onset,
+        dropping below floor + TRANS_VAD_KEEP as quiet. A fixed threshold
+        here either misses soft voices or, with a noisy mic, never sees
+        "quiet" at all and holds the capture open forever."""
         pre_blocks = int(0.5 * SAMPLERATE / BLOCKSIZE)   # pre-roll kept in auto
         t0 = time.time()
         heard = False
         quiet_since = None
+        floor = TRANS_FLOOR_DB
         while True:
             time.sleep(0.05)
             with self._lock:
                 if not self.capturing or self.state.trans_tap is not tap:
                     return             # manual stop, or not our capture anymore
                 now = time.time()
-                if self.state.in_level >= thresh:
+                lvl = 20.0 * np.log10(max(float(self.state.in_level), 1e-4))
+                floor = min(TRANS_FLOOR_MAX,
+                            lvl if lvl < floor else floor + 0.15)
+                if lvl >= floor + (TRANS_VAD_KEEP if heard and
+                                   quiet_since is None else TRANS_VAD_START):
                     heard, quiet_since = True, None
                 elif heard:
                     quiet_since = quiet_since or now

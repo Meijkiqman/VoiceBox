@@ -23,7 +23,13 @@ TRANS_MODEL    = "small"    # faster-whisper size; override via settings.json
                             # "trans_model" ("base" = lighter, "medium" = better)
 TRANS_MAX_S    = 30.0       # capture cap per utterance, seconds
 TRANS_MIN_S    = 0.4        # discard blips shorter than this
-TRANS_SPEECH_DB = -38.0     # mic level that counts as "started talking"
+# Utterance end-pointing is adaptive: the watcher tracks the mic's noise
+# floor (fast fall, slow rise) and calls speech a rise above it - a fixed
+# threshold either misses quiet mics or never releases on noisy ones.
+TRANS_VAD_START = 12.0      # dB above the noise floor that starts speech
+TRANS_VAD_KEEP  = 6.0       # dB above the floor that keeps it going
+TRANS_FLOOR_DB  = -60.0     # initial floor guess (falls to reality fast)
+TRANS_FLOOR_MAX = -30.0     # the floor may never rise above this
 TRANS_AUTO_STOP_S = 1.2     # trailing silence that auto-sends the capture
 TRANS_IDLE_S   = 8.0        # give up when nothing was said at all
 

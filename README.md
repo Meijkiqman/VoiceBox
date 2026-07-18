@@ -39,8 +39,8 @@ Or by hand: `pip install -r requirements.txt`, then `python voicebox.py`.
   the effect chain.
 - **Text to speech** - typed phrases speak into the mic, through the
   effects or the AI voice, with any installed OS voice.
-- **Speech translator** - flip the TRANS chip (next to HEAR) and just
-  talk: each sentence you say is transcribed, translated (English,
+- **Speech translator** - flip **Auto translate** (top of the
+  Translator card) and just talk: each sentence you say is transcribed, translated (English,
   Spanish or Mandarin) and spoken into the mic in a native TTS voice - or
   in *your* RVC voice while the AI voice is live - while your raw voice
   stays off the cable. Ctrl+Alt+T does a one-shot capture instead.
@@ -72,8 +72,9 @@ runs without the AI voice.
 ## Speech translator
 
 `pip install -r requirements-translator.txt`, then flip the **TRANS**
-chip in the strip next to HEAR and just talk: each sentence is detected
-by its trailing silence, translated, and spoken into the cable a moment
+row at the top of the Translator card and just talk: each sentence is
+detected by its trailing silence (adaptive - it learns your mic's noise
+floor, so background hum can't hold a capture open), translated, and spoken into the cable a moment
 later - your raw voice never goes out while TRANS is on. Prefer it
 per-sentence? Tap Ctrl+Alt+T (or the Translate row) for a one-shot
 capture that sends itself the same way.
