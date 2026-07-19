@@ -41,9 +41,9 @@ Or by hand: `pip install -r requirements.txt`, then `python voicebox.py`.
 - **Text to speech** - typed phrases speak into the mic, through the
   effects or the AI voice, with any installed OS voice - or with the
   optional **Piper neural voices** (very realistic, fully offline):
-  `setup/Get-PiperVoices.bat` installs Ryan (male) and Lessac (female),
-  and any voice from the Piper collection dropped into `piper/voices/`
-  joins the pickers too.
+  `setup/Get-PiperVoices.bat` installs six English voices (3 male /
+  3 female, US and British), and any voice from the Piper collection
+  dropped into `piper/voices/` joins the pickers too.
 - **Speech translator** - flip **Auto translate** (top of the
   Translator card) and just talk: each sentence you say is transcribed, translated (English,
   Spanish or Mandarin) and spoken into the mic in a native TTS voice - or
@@ -80,8 +80,10 @@ The voice pickers list every installed OS voice (Windows: SAPI5 +
 OneCore; add more under Settings -> Time & Language -> Speech - Microsoft
 David is the standard male English one). For *realistic* speech, run
 `setup/Get-PiperVoices.bat` once: it installs the offline Piper neural
-engine plus **Ryan** (male) and **Lessac** (female), which appear as
-"Piper: ..." at the top of every picker (~250 MB total). Other
+engine plus six English voices - **Ryan** and **Lessac** (US, very
+natural), **Hfc Male** and **Hfc Female** (US, clean), **Alan** and
+**Cori** (British) - which appear as "Piper: ..." at the top of every
+picker (~560 MB total). Other
 languages/voices: grab the `.onnx` + `.onnx.json` pair from
 [the Piper voice collection](https://huggingface.co/rhasspy/piper-voices)
 into `piper/voices/`.

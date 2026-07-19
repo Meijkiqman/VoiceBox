@@ -1,9 +1,13 @@
-"""Install the Piper neural TTS engine + two realistic English voices.
+"""Install the Piper neural TTS engine + six realistic English voices.
 
 Downloads into <VoiceBox>/piper/:
     piper.exe (or piper on Linux/macOS) + its espeak-ng data
-    voices/en_US-ryan-high.onnx    - male, very natural
-    voices/en_US-lessac-high.onnx  - female, very natural
+    voices/en_US-ryan-high.onnx        - male, US, very natural
+    voices/en_US-lessac-high.onnx      - female, US, very natural
+    voices/en_US-hfc_male-medium.onnx  - male, US, clean and modern
+    voices/en_US-hfc_female-medium.onnx- female, US, clean and modern
+    voices/en_GB-alan-medium.onnx      - male, British
+    voices/en_GB-cori-high.onnx        - female, British
 
 Idempotent: anything already present is skipped. Run from anywhere:
     python setup/get_piper_voices.py
@@ -35,10 +39,18 @@ ENGINE = {
 }
 HF = "https://huggingface.co/rhasspy/piper-voices/resolve"
 VOICE_PATHS = [
-    "en/en_US/ryan/high/en_US-ryan-high.onnx",         # male, very natural
+    "en/en_US/ryan/high/en_US-ryan-high.onnx",         # male US, very natural
     "en/en_US/ryan/high/en_US-ryan-high.onnx.json",
-    "en/en_US/lessac/high/en_US-lessac-high.onnx",     # female, very natural
+    "en/en_US/lessac/high/en_US-lessac-high.onnx",     # female US, very natural
     "en/en_US/lessac/high/en_US-lessac-high.onnx.json",
+    "en/en_US/hfc_male/medium/en_US-hfc_male-medium.onnx",      # male US, clean
+    "en/en_US/hfc_male/medium/en_US-hfc_male-medium.onnx.json",
+    "en/en_US/hfc_female/medium/en_US-hfc_female-medium.onnx",  # female US, clean
+    "en/en_US/hfc_female/medium/en_US-hfc_female-medium.onnx.json",
+    "en/en_GB/alan/medium/en_GB-alan-medium.onnx",     # male, British
+    "en/en_GB/alan/medium/en_GB-alan-medium.onnx.json",
+    "en/en_GB/cori/high/en_GB-cori-high.onnx",         # female, British
+    "en/en_GB/cori/high/en_GB-cori-high.onnx.json",
 ]
 VOICE_FILES = [(f"{HF}/v1.0.0/{p}", f"{HF}/main/{p}") for p in VOICE_PATHS]
 
@@ -92,7 +104,8 @@ def install_voices():
         if dest.is_file() and dest.stat().st_size > 0:
             print(f"voice:  {name} already present")
             continue
-        size = "~110 MB" if name.endswith(".onnx") else "config"
+        size = ("~110 MB" if "-high" in name else "~65 MB") \
+            if name.endswith(".onnx") else "config"
         try:
             data = fetch_any(urls, f"{name} ({size})")
         except Exception as e:
@@ -113,8 +126,12 @@ def main():
     install_engine()
     install_voices()
     print("\nDone. Start VoiceBox - the voice pickers now list:")
-    print("  Piper: Ryan (en_US, high)     male, natural")
-    print("  Piper: Lessac (en_US, high)   female, natural")
+    print("  Piper: Ryan (en_US, high)          male, very natural")
+    print("  Piper: Lessac (en_US, high)        female, very natural")
+    print("  Piper: Hfc Male (en_US, medium)    male, clean")
+    print("  Piper: Hfc Female (en_US, medium)  female, clean")
+    print("  Piper: Alan (en_GB, medium)        male, British")
+    print("  Piper: Cori (en_GB, high)          female, British")
 
 
 if __name__ == "__main__":

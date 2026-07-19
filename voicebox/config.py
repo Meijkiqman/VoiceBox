@@ -10,8 +10,9 @@ SCENES_PATH   = BASE_DIR / "scenes.json"         # "Save scene" full-setup snaps
 RECORDINGS_DIR = BASE_DIR / "recordings"         # "Record output" wav files
 
 # Optional neural TTS (Piper): run setup/Get-PiperVoices.bat to install the
-# engine + a realistic male/female English pair into this folder. Voices in
-# piper/voices/*.onnx appear in every voice picker as "Piper: ...".
+# engine + six realistic English voices (3 male / 3 female, US + British)
+# into this folder. Any extra .onnx+.onnx.json pair dropped into
+# piper/voices/ appears in every voice picker as "Piper: ...".
 PIPER_DIR = BASE_DIR / "piper"
 
 TTS_PHRASES_PATH = BASE_DIR / "tts_phrases.json"  # saved TTS phrases

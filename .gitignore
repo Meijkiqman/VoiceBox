@@ -22,6 +22,9 @@ tts_cache/
 # AI voice - RVC runtime + voice models (~12 GB of binaries, stays local)
 rvc/
 
+# neural TTS - Piper engine + voice models (~600 MB, setup/Get-PiperVoices.bat)
+piper/
+
 # logs / local junk
 *.log
 

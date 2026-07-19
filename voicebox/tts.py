@@ -38,7 +38,8 @@ def piper_voice_map():
     out = {}
     for f in sorted(Path(PIPER_DIR, "voices").glob("*.onnx")):
         parts = f.stem.split("-")
-        disp = (f"Piper: {parts[1].title()} ({parts[0]}, {parts[2]})"
+        disp = (f"Piper: {parts[1].replace('_', ' ').title()} "
+                f"({parts[0]}, {parts[2]})"
                 if len(parts) >= 3 else f"Piper: {f.stem}")
         out[disp] = f
     return out
