@@ -263,6 +263,10 @@ class Menu:
                 "Retrain AI voice",
                 trainer.label,
                 select=trainer.launch))
+            self.items.append(MenuItem(
+                "Train new model",
+                trainer.new_label,
+                select=trainer.new_model))
         if recorder is not None:
             self.items.append(MenuItem(
                 "Record output",
@@ -717,7 +721,8 @@ def run_ui(state, stop_flag, dev_line, err_line="", monitor=None, board=None,
              if ai else None,
              show=ai is not None and ai.available),
         card("myvoice", "MY VOICE",
-             _rows("Voice harvest", "Dataset", "Retrain AI voice"),
+             _rows("Voice harvest", "Dataset", "Retrain AI voice",
+                   "Train new model"),
              dot=(lambda: harvester.on) if harvester else None,
              summary=(lambda: "EXP"),
              show=harvester is not None),

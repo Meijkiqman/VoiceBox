@@ -82,7 +82,10 @@ muted) are saved to rvc/dataset_self/ as RVC training data, up to a
 60-minute cap. "Retrain AI voice" trains/refreshes the MyVoice model
 from them in a separate console window (experimental - the training
 pieces from the full RVC-beta0717 zip must be present; see
-design/VOICE_TRAINING.md).
+design/VOICE_TRAINING.md). "Train new model" builds any other voice the
+same way: name it, pick clips (the dialog opens in the training/ drop
+folder), and training starts by itself; the finished model joins the AI
+character row without a restart.
 
 SCENES
 ------

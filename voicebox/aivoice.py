@@ -171,6 +171,13 @@ class AiVoice:
         weights = self.rvc_dir / "weights"
         return sorted(weights.glob("*.pth")) if weights.is_dir() else []
 
+    def rescan(self):
+        """Re-list weights/*.pth - a finished training run adds models
+        while VoiceBox is up. The current selection survives by name."""
+        current = self.voices[self.sel] if self.voices else None
+        self.voices = self._scan()
+        self.sel = self.voices.index(current) if current in self.voices else 0
+
     def _index_for(self, pth):
         """Find the .index that belongs to a model (accent/timbre lookup)."""
         stem = pth.stem.lower()

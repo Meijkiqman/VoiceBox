@@ -26,6 +26,26 @@ Collection stops by itself at 60 minutes: RVC stops improving with more
 data long before that, and hours of raw gaming audio make models worse,
 not better. To start a fresh dataset, delete wavs from `rvc/dataset_self/`.
 
+## Train a brand-new voice ("Train new model")
+
+For a voice that isn't yours - a character, a friend who donated clips -
+use the **Train new model** row instead of the harvest loop:
+
+1. Drop audio clips of the target voice into the `training/` folder
+   (created next to `VoiceBox.bat`; wav/flac/ogg/mp3 - clean speech, no
+   music or crowds).
+2. Press **Train new model**, type a name for the model, and pick the
+   clips in the file dialog (it opens in `training/`).
+3. That's it - the clips are converted into an RVC dataset
+   (`rvc/dataset_<name>/`, mono 16-bit wavs in <=12 s pieces) and training
+   starts by itself in its own console window, exactly like a retrain.
+
+You need at least ~2 minutes of usable audio (10 pieces) or the row tells
+you to add more; 10-30 minutes is the sweet spot. When training finishes,
+the model joins the **AI character** row right away - no restart. Names
+collide on purpose: picking an existing model's name is refused so a new
+model can't silently eat an old one.
+
 ## Training pieces (one-time setup)
 
 The trimmed RVC package that ships with VoiceBox contains the *inference*

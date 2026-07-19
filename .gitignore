@@ -11,6 +11,10 @@ dist/
 sounds/*
 !sounds/.gitkeep
 
+# personal media - "Train new model" voice clips stay local
+training/*
+!training/README.txt
+
 # TTS - personal phrases + rendered speech cache stay local
 tts_phrases.json
 tts_cache/

@@ -52,6 +52,11 @@ LISTEN_MAX_S    = 15.0      # force a cut on monologues, seconds
 LISTEN_CAPTION_S = 12.0     # how long a caption stays on screen
 LISTEN_CAPTION_N = 3        # caption lines shown at once
 
+# "Train new model": drop audio clips of the voice you want to clone into
+# this folder - the row's file picker opens here, and training starts by
+# itself once the clips are chosen.
+TRAINING_DIR = BASE_DIR / "training"
+
 # Voice harvester: collects clean speech clips from the real mic as training
 # data for an RVC model of the user's own voice (rvc/dataset_self/, or
 # voice_dataset/ when no RVC package is installed).
