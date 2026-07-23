@@ -24,7 +24,8 @@ TTS_MAX_CHARS    = 200                            # per-phrase length cap
 # translated and spoken into the cable in the target language's TTS voice
 # (through the effects or the AI voice, like a typed phrase).
 TRANS_SOURCES  = [("auto", "auto"), ("no", "Norwegian"), ("en", "English")]
-TRANS_TARGETS  = [("en", "English"), ("es", "Spanish"), ("zh", "Mandarin")]
+TRANS_TARGETS  = [("en", "English"), ("es", "Spanish"), ("zh", "Mandarin"),
+                  ("fa", "Persian"), ("pa", "Punjabi")]
 TRANS_MODEL    = "small"    # faster-whisper size; override via settings.json
                             # "trans_model" ("base" = lighter, "medium" = better)
 TRANS_MAX_S    = 30.0       # capture cap per utterance, seconds
@@ -55,8 +56,11 @@ LISTEN_CAPTION_N = 3        # caption lines shown at once
 
 # "Train new model": drop audio clips of the voice you want to clone into
 # this folder - the row's file picker opens here, and training starts by
-# itself once the clips are chosen.
+# itself once the clips are chosen. Every attempt writes a log next to
+# them (training/logs/), which is the thing to read when a run fails: the
+# console window is gone by then, but the log has the whole run in it.
 TRAINING_DIR = BASE_DIR / "training"
+TRAIN_LOG_DIR = TRAINING_DIR / "logs"
 
 # Voice harvester: collects clean speech clips from the real mic as training
 # data for an RVC model of the user's own voice (rvc/dataset_self/, or

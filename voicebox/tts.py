@@ -55,7 +55,10 @@ def _synth_piper(text, wav_path, voice, rate):
     ls = 2.0 ** (-float(max(-10, min(10, rate))) / 10.0)
     cmd = [str(exe), "--model", str(onnx), "--output_file", str(wav_path),
            "--length_scale", f"{ls:.3f}"]
-    r = _piper_run(cmd, input=text, text=True, capture_output=True,
+    # encoding="utf-8": Piper reads the phrase from stdin as UTF-8. The
+    # default (text=True) uses the locale codec - cp1252 on Windows - which
+    # can't encode Mandarin/Persian/Punjabi and raises before Piper is fed.
+    r = _piper_run(cmd, input=text, encoding="utf-8", capture_output=True,
                    timeout=120, cwd=str(exe.parent),
                    creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
     if r.returncode != 0 or not Path(wav_path).is_file():
@@ -79,7 +82,11 @@ def winrt_speaking_rate(rate):
 _WIN_TTS_PS = r"""
 $ErrorActionPreference = 'Stop'
 $path = '__PATH__'; $rate = __RATE__; $voiceName = '__VOICE__'
-$text = [Console]::In.ReadToEnd()
+# Read the phrase as UTF-8 regardless of the console's input codepage, so
+# non-Latin text (Mandarin/Persian/...) survives the pipe intact.
+$reader = New-Object System.IO.StreamReader(
+    [Console]::OpenStandardInput(), [System.Text.Encoding]::UTF8)
+$text = $reader.ReadToEnd()
 Add-Type -AssemblyName System.Speech
 $sapi = New-Object System.Speech.Synthesis.SpeechSynthesizer
 $sapiVoice = $null
@@ -160,7 +167,7 @@ def synth_tts_wav(text, wav_path, voice=None, rate=0):
         if rate:
             cmd += ["-s", str(wpm)]
         cmd += ["--stdin"]
-    r = subprocess.run(cmd, input=text, text=True, capture_output=True,
+    r = subprocess.run(cmd, input=text, encoding="utf-8", capture_output=True,
                        timeout=60,
                        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
     if r.returncode != 0:

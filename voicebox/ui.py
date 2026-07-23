@@ -7,8 +7,8 @@ from pathlib import Path
 
 import numpy as np
 
-from .config import (BASE_DIR, SAMPLERATE, SOUNDS_DIR, TTS_MAX_CHARS,
-                     WINDOW_SIZE)
+from .config import (BASE_DIR, SAMPLERATE, SOUNDS_DIR, TRANS_TARGETS,
+                     TTS_MAX_CHARS, WINDOW_SIZE)
 from .controls import build_keymap, load_controls
 from .soundboard import Board
 from .tts import TTSBank
@@ -1346,10 +1346,10 @@ def run_ui(state, stop_flag, dev_line, err_line="", monitor=None, board=None,
     # --------------------------------------------------- dropdown picker
     # Every selector with more than three alternatives opens a picker
     # (Scene/Preset/AI character are editable lists; the rest are plain
-    # pick-one lists). Three or fewer - Translate from/to - keep < >.
+    # pick-one lists). Three or fewer - Translate from - keep < >.
     DROP_ROWS = ("Scene", "Preset", "AI character", "TTS voice",
-                 "Translate voice", "Listen device", "Input device",
-                 "Output device")
+                 "Translate to", "Translate voice", "Listen device",
+                 "Input device", "Output device")
     drop = None
 
     def _pick_list(label):
@@ -1365,6 +1365,12 @@ def run_ui(state, stop_flag, dev_line, err_line="", monitor=None, board=None,
                     state.tts_voice = v
                 tts.invalidate()
             return (["default"] + names, opts, state.tts_voice, apply)
+        if label == "Translate to" and translator is not None:
+            def apply(v):
+                with state.lock:
+                    state.trans_target = v
+            return ([n for _, n in TRANS_TARGETS],
+                    [c for c, _ in TRANS_TARGETS], translator.target(), apply)
         if label == "Translate voice" and translator is not None:
             names = sorted(translator.voice_names or [], key=str.lower)
             if not names:

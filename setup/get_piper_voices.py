@@ -1,4 +1,7 @@
-"""Install the Piper neural TTS engine + six realistic English voices.
+"""Install the Piper neural TTS engine + six realistic English voices,
+plus one voice per Translate target language (the Windows default voices
+are English-only, so without these the translator's Spanish/Mandarin/
+Persian output has nothing that can speak it).
 
 Downloads into <VoiceBox>/piper/:
     piper.exe (or piper on Linux/macOS) + its espeak-ng data
@@ -8,12 +11,16 @@ Downloads into <VoiceBox>/piper/:
     voices/en_US-hfc_female-medium.onnx- female, US, clean and modern
     voices/en_GB-alan-medium.onnx      - male, British
     voices/en_GB-cori-high.onnx        - female, British
+    voices/es_ES-davefx-medium.onnx    - male, Spanish (Translate target)
+    voices/zh_CN-huayan-medium.onnx    - female, Mandarin (Translate target)
+    voices/fa_IR-amir-medium.onnx      - male, Persian (Translate target)
+(Punjabi has no Piper or Windows voice; that target stays text-only.)
 
 Idempotent: anything already present is skipped. Run from anywhere:
     python setup/get_piper_voices.py
 or double-click setup/Get-PiperVoices.bat on Windows.
 
-More voices (other languages included - Spanish, Mandarin, Norwegian, ...):
+More voices (other languages included - Norwegian, more Spanish, ...):
 browse https://huggingface.co/rhasspy/piper-voices and drop the .onnx +
 .onnx.json pair into piper/voices/. They appear in every VoiceBox voice
 picker as "Piper: ..." on next launch."""
@@ -51,6 +58,14 @@ VOICE_PATHS = [
     "en/en_GB/alan/medium/en_GB-alan-medium.onnx.json",
     "en/en_GB/cori/high/en_GB-cori-high.onnx",         # female, British
     "en/en_GB/cori/high/en_GB-cori-high.onnx.json",
+    # Translate target voices - the translator auto-picks these by the
+    # language code in the name (see voicebox/translator.py VOICE_HINTS)
+    "es/es_ES/davefx/medium/es_ES-davefx-medium.onnx",  # male, Spanish
+    "es/es_ES/davefx/medium/es_ES-davefx-medium.onnx.json",
+    "zh/zh_CN/huayan/medium/zh_CN-huayan-medium.onnx",  # female, Mandarin
+    "zh/zh_CN/huayan/medium/zh_CN-huayan-medium.onnx.json",
+    "fa/fa_IR/amir/medium/fa_IR-amir-medium.onnx",      # male, Persian
+    "fa/fa_IR/amir/medium/fa_IR-amir-medium.onnx.json",
 ]
 VOICE_FILES = [(f"{HF}/v1.0.0/{p}", f"{HF}/main/{p}") for p in VOICE_PATHS]
 
@@ -132,6 +147,10 @@ def main():
     print("  Piper: Hfc Female (en_US, medium)  female, clean")
     print("  Piper: Alan (en_GB, medium)        male, British")
     print("  Piper: Cori (en_GB, high)          female, British")
+    print("  Piper: Davefx (es_ES, medium)      male, Spanish")
+    print("  Piper: Huayan (zh_CN, medium)      female, Mandarin")
+    print("  Piper: Amir (fa_IR, medium)        male, Persian")
+    print("(the translator auto-picks the last three for their languages)")
 
 
 if __name__ == "__main__":

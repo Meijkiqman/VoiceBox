@@ -1,5 +1,6 @@
 """rvc_trainer.py - train/refresh an RVC voice model from a local dataset,
-driven by VoiceBox's "Retrain AI voice" row (or by hand).
+driven by VoiceBox's "Retrain AI voice" / "Train new model" rows (or by
+hand).
 
 EXPERIMENTAL. This orchestrates the RVC-beta0717 training pipeline the same
 way the RVC WebUI's Train tab does, but headless. It MUST be run with RVC's
@@ -19,8 +20,12 @@ full RVC-beta0717 zip if --check complains):
 
 Steps: preprocess -> f0 -> features -> filelist/config -> train -> faiss
 index. Progress prints straight to the console; VoiceBox launches this in
-its own window so you can watch. Re-running with a bigger --epochs resumes
-from the checkpoints in logs/<name>/ instead of starting over.
+its own window so you can watch, and passes --log so everything (including
+each sub-step's output) is also written to a file you can read afterwards.
+On failure the window is held open until you press Enter - a training run
+that dies in the first seconds used to vanish before it could be read.
+Re-running with a bigger --epochs resumes from the checkpoints in
+logs/<name>/ instead of starting over.
 
 The finished model lands in weights/<name>*.pth (newest = best) and the
 matching .index in logs/<name>/ - exactly where VoiceBox looks for AI
@@ -34,11 +39,40 @@ import subprocess
 import sys
 from pathlib import Path
 
+_log_file = None                      # open handle when --log was given
+
+
+def say(msg=""):
+    """Print to the console AND to the log file, if there is one."""
+    print(msg, flush=True)
+    if _log_file is not None:
+        try:
+            _log_file.write(str(msg) + "\n")
+            _log_file.flush()
+        except Exception:
+            pass
+
+
+def die(msg):
+    """Log a fatal reason, then exit non-zero (caught in __main__, which
+    holds the console open so the reason can actually be read)."""
+    say("\nERROR: " + str(msg))
+    sys.exit(1)
+
+
 def sh(cmd):
-    print("\n>>> " + " ".join(str(c) for c in cmd), flush=True)
-    r = subprocess.run([str(c) for c in cmd])
-    if r.returncode != 0:
-        sys.exit(f"step failed (exit {r.returncode}): {cmd[1]}")
+    """Run one pipeline step, streaming its output to console + log. The
+    child's stdout is piped (not inherited) so the log captures it too;
+    PYTHONUNBUFFERED keeps that output live rather than block-buffered."""
+    say("\n>>> " + " ".join(str(c) for c in cmd))
+    env = dict(os.environ, PYTHONUNBUFFERED="1")
+    p = subprocess.Popen([str(c) for c in cmd], stdout=subprocess.PIPE,
+                         stderr=subprocess.STDOUT, text=True, bufsize=1,
+                         errors="replace", env=env)
+    for line in p.stdout:
+        say(line.rstrip("\n"))
+    if p.wait() != 0:
+        die(f"step failed (exit {p.returncode}): {cmd[1]}")
 
 
 def newest(pattern):
@@ -52,8 +86,8 @@ def expect_output(folder, step):
     the exit code."""
     folder = Path(folder)
     if not folder.is_dir() or not any(folder.iterdir()):
-        sys.exit(f"{step} produced nothing in {folder} - scroll up for its "
-                 "errors (bad wavs? missing model files?)")
+        die(f"{step} produced nothing in {folder} - scroll up for its "
+            "errors (bad wavs? missing model files?)")
 
 
 def check_requirements(version, sr="40k"):
@@ -72,13 +106,25 @@ def check_requirements(version, sr="40k"):
             or Path("extract_f0_print.py").is_file()):
         needed.append("extract_f0_print.py")
     missing = [n for n in needed if not Path(n).exists()]
+    # helper modules the RVC scripts import. Layouts differ between beta
+    # builds: some keep them at the top level, some under train/ (which
+    # the trainer puts on sys.path itself) - either satisfies the import.
+    for mod in ("data_utils.py", "losses.py", "mel_processing.py",
+                "process_ckpt.py", "utils.py"):
+        if not (Path(mod).is_file() or Path("train", mod).is_file()):
+            missing.append(f"train/{mod}")
+    for mod in ("my_utils.py", "i18n.py"):
+        if not Path(mod).is_file():
+            missing.append(mod)
     if missing:
-        print("MISSING from this RVC folder (copy from the full "
-              "RVC-beta0717 zip):")
+        say("MISSING from this RVC folder (copy from the full "
+            "RVC-beta0717 zip):")
         for n in missing:
-            print("   " + n)
+            say("   " + n)
+        say("\nThis RVC folder is set up for INFERENCE only - the pieces "
+            "above are training-only and are not part of it.")
         return False
-    print("all training pieces found.")
+    say("all training pieces found.")
     return True
 
 
@@ -94,9 +140,24 @@ def main():
     ap.add_argument("--sr", default="40k", choices=["32k", "40k", "48k"])
     ap.add_argument("--version", default="v2", choices=["v1", "v2"])
     ap.add_argument("--save-every", type=int, default=50)
+    ap.add_argument("--log", default="",
+                    help="also write everything to this file")
     ap.add_argument("--check", action="store_true",
                     help="only verify the training pieces exist")
     args = ap.parse_args()
+
+    global _log_file
+    if args.log:
+        try:
+            Path(args.log).parent.mkdir(parents=True, exist_ok=True)
+            _log_file = open(args.log, "a", encoding="utf-8", errors="replace")
+        except Exception as e:
+            print(f"(could not open log {args.log}: {e})", flush=True)
+
+    say(f"--- rvc_trainer: name={args.name} dataset={args.dataset} "
+        f"sr={args.sr} {args.version} epochs={args.epochs} ---")
+    say(f"cwd (RVC folder): {Path.cwd()}")
+    say(f"python: {sys.executable}")
 
     if not check_requirements(args.version, args.sr):
         sys.exit(1)
@@ -106,11 +167,11 @@ def main():
     dataset = Path(args.dataset)
     wavs = sorted(dataset.glob("*.wav")) if dataset.is_dir() else []
     if len(wavs) < 10:
-        sys.exit(f"dataset {dataset} has {len(wavs)} wavs - need at least 10 "
-                 "(a few minutes of speech). Turn on 'Voice harvest' in "
-                 "VoiceBox and talk for a while.")
+        die(f"dataset {dataset} has {len(wavs)} wavs - need at least 10 "
+            "(a few minutes of speech). Turn on 'Voice harvest' in "
+            "VoiceBox and talk for a while, or pick more clips.")
     total_s = sum(max(0, f.stat().st_size - 44) / (48000 * 2) for f in wavs)
-    print(f"dataset: {len(wavs)} clips, ~{total_s / 60:.1f} min")
+    say(f"dataset: {len(wavs)} clips, ~{total_s / 60:.1f} min")
 
     exp = Path("logs") / args.name
     exp.mkdir(parents=True, exist_ok=True)
@@ -120,13 +181,16 @@ def main():
     try:
         import torch
         gpu = torch.cuda.is_available()
-    except Exception:
+        say(f"torch {torch.__version__}, CUDA available: {gpu}"
+            + (f", device: {torch.cuda.get_device_name(0)}" if gpu else ""))
+    except Exception as e:
         gpu = False
+        say(f"torch unavailable: {e}")
     if not gpu:
         # the beta0717 trainer is GPU-only in practice; refusing beats a
         # "run" that burns hours and produces nothing
-        sys.exit("no CUDA GPU visible - RVC training needs an NVIDIA GPU. "
-                 "If you have one, check the RVC runtime's torch install.")
+        die("no CUDA GPU visible - RVC training needs an NVIDIA GPU. "
+            "If you have one, check the RVC runtime's torch install.")
     device = "cuda:0"
     feat = "3_feature768" if args.version == "v2" else "3_feature256"
 
@@ -138,7 +202,7 @@ def main():
         (f.name, f.stat().st_size) for f in wavs))
     old = fp_file.read_text() if fp_file.is_file() else ""
     if old and old != fingerprint:
-        print("dataset changed since the last run - redoing preprocessing")
+        say("dataset changed since the last run - redoing preprocessing")
         for d in ("0_gt_wavs", "1_16k_wavs", "2a_f0", "2b-f0nsf",
                   "3_feature256", "3_feature768"):
             shutil.rmtree(exp / d, ignore_errors=True)
@@ -168,8 +232,8 @@ def main():
              & {f.name[:-len(".wav.npy")] for f in (exp / "2a_f0").glob("*.wav.npy")}
              & {f.name[:-len(".wav.npy")] for f in (exp / "2b-f0nsf").glob("*.wav.npy")})
     if not names:
-        sys.exit("preprocessing produced no usable segments - check the "
-                 "dataset wavs (48k mono speech).")
+        die("preprocessing produced no usable segments - check the "
+            "dataset wavs (48k mono speech).")
     lines = [f"{exp}/0_gt_wavs/{n}.wav|{exp}/{feat}/{n}.npy"
              f"|{exp}/2a_f0/{n}.wav.npy|{exp}/2b-f0nsf/{n}.wav.npy|0"
              for n in sorted(names)]
@@ -187,10 +251,9 @@ def main():
             cfg = cand
             break
     if cfg is None:
-        sys.exit("no matching configs/*.json for "
-                 f"{args.sr} {args.version}")
+        die(f"no matching configs/*.json for {args.sr} {args.version}")
     shutil.copyfile(cfg, exp / "config.json")
-    print(f"filelist: {len(lines)} entries, config: {cfg}")
+    say(f"filelist: {len(lines)} entries, config: {cfg}")
 
     # 5) train (resumes from logs/<name>/G_*.pth automatically when present)
     pre = "pretrained_v2" if args.version == "v2" else "pretrained"
@@ -208,7 +271,7 @@ def main():
         big = np.concatenate([np.load(str(f)) for f in npys], axis=0)
         np.random.shuffle(big)
         if big.shape[0] > 2e5:
-            print(f"index: {big.shape[0]} rows is a lot - sampling 200k")
+            say(f"index: {big.shape[0]} rows is a lot - sampling 200k")
             big = big[: int(2e5)]
         dim = big.shape[1]
         n_ivf = min(int(16 * np.sqrt(big.shape[0])), big.shape[0] // 39)
@@ -219,21 +282,44 @@ def main():
         out = exp / (f"added_IVF{n_ivf}_Flat_nprobe_1_{args.name}"
                      f"_{args.version}.index")
         faiss.write_index(index, str(out))
-        print(f"index written: {out}")
+        say(f"index written: {out}")
     except Exception as e:
-        print(f"index build skipped ({e}) - the voice still works, just "
-              "without the accent-lookup index.")
+        say(f"index build skipped ({e}) - the voice still works, just "
+            "without the accent-lookup index.")
 
     w = newest(f"weights/{args.name}*.pth")
     if w:
-        print(f"\nDONE. model: {w}  - it appears in VoiceBox's AI character "
-              "row on next launch (or after re-selecting the AI voice).")
+        say(f"\nDONE. model: {w}  - it appears in VoiceBox's AI character "
+            "row on next launch (or after re-selecting the AI voice).")
     else:
-        print("\nTraining finished but no weights/<name>*.pth was written - "
-              "open the RVC WebUI's ckpt tab to extract the small model from "
-              f"{exp}/G_*.pth, or re-run with --epochs a multiple of "
-              "--save-every.")
+        say("\nTraining finished but no weights/<name>*.pth was written - "
+            "open the RVC WebUI's ckpt tab to extract the small model from "
+            f"{exp}/G_*.pth, or re-run with --epochs a multiple of "
+            "--save-every.")
+
+
+def hold(msg):
+    """Keep a CREATE_NEW_CONSOLE window open so its last lines can be read
+    (without this, a run that dies in the first seconds just vanishes)."""
+    try:
+        input(msg)
+    except Exception:
+        pass
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except KeyboardInterrupt:
+        say("\ninterrupted.")
+        sys.exit(130)
+    except SystemExit as e:
+        if e.code:
+            say(f"\nTRAINING FAILED (exit {e.code}). The reason is above.")
+            hold("press Enter to close this window...")
+        raise
+    except Exception:
+        import traceback
+        say("\nunexpected error:\n" + traceback.format_exc())
+        hold("press Enter to close this window...")
+        sys.exit(1)

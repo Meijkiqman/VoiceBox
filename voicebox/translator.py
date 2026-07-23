@@ -22,21 +22,38 @@ from .config import (BLOCKSIZE, SAMPLERATE, TRANS_AUTO_STOP_S,
 from .tts import tts_synthesize
 
 # Whisper reports ISO codes; Argos wants "nb" for Norwegian (Bokmål - "nn"
-# Nynorsk speech is close enough that routing it through nb beats failing).
-ARGOS_CODE = {"no": "nb", "nn": "nb", "en": "en", "es": "es", "zh": "zh"}
+# Nynorsk speech is close enough that routing it through nb beats failing)
+# and "pb" for Punjabi (Whisper detects it as "pa").
+ARGOS_CODE = {"no": "nb", "nn": "nb", "en": "en", "es": "es", "zh": "zh",
+              "fa": "fa", "pa": "pb"}
 
-# Argos package pairs the configured languages need. no->es / no->zh pivot
-# through English, so nb->en plus en->target covers every combination.
+# Argos package pairs preinstalled on first model load (the default
+# languages). no->es / no->zh pivot through English, so nb->en plus
+# en->target covers every combination; other targets (Persian, Punjabi)
+# fetch their en->target pack on first use instead - see _ensure_pair.
 ARGOS_PAIRS = [("nb", "en"), ("en", "es"), ("en", "zh")]
 
 # Substrings that identify an installed OS voice for a target language, for
 # auto-picking when the user hasn't chosen one ("Microsoft Pablo - Spanish
-# (Spain)", "Microsoft Huihui - Chinese (Simplified, PRC)", ...).
+# (Spain)", "Piper: Amir (fa_IR, medium)", ...).
 VOICE_HINTS = {
     "en": ("english", "en_us", "en_gb"),
     "es": ("spanish", "español", "espanol", "es_es", "es_mx"),
     "zh": ("chinese", "mandarin", "taiwanese", "zh_cn"),
+    "fa": ("persian", "farsi", "fa_ir"),
+    "pa": ("punjabi", "panjabi", "pa_in", "pa_pk"),
 }
+
+
+def latin_script(text):
+    """True when the text is mostly Latin script - something the default
+    (English) voice can at least pronounce. Chinese/Persian/Punjabi text
+    through an English engine voice comes out as pure silence, so a missing
+    target voice must be reported, not spoken."""
+    letters = [c for c in text if c.isalpha()]
+    if not letters:
+        return True
+    return sum(ord(c) < 0x250 for c in letters) * 2 >= len(letters)
 
 
 def pick_voice(names, lang, explicit=None):
@@ -368,11 +385,14 @@ class Translator:
 
     def _ensure_pair(self, src, dst):
         """Fetch the Argos package(s) for src->dst on demand - the incoming
-        listener meets languages the base install doesn't cover. Only a
-        definitive "the index has no such pack" is remembered in _no_pack;
-        a network hiccup stays retryable on the next utterance."""
-        if src in self._no_pack:
-            raise RuntimeError(f"no translation pack for '{src}'")
+        listener meets languages the base install doesn't cover, and the
+        outgoing path fetches en->target for targets beyond ARGOS_PAIRS.
+        Only a definitive "the index has no such pack" is remembered in
+        _no_pack (blaming the exotic side, never the en pivot); a network
+        hiccup stays retryable on the next utterance."""
+        for code in (src, dst):
+            if code in self._no_pack:
+                raise RuntimeError(f"no translation pack for '{code}'")
         import argostranslate.package as apkg
         installed = {(p.from_code, p.to_code)
                      for p in apkg.get_installed_packages()}
@@ -386,20 +406,22 @@ class Translator:
             apkg.update_package_index()
             available = apkg.get_available_packages()
         except Exception:
-            raise RuntimeError(f"pack fetch for '{src}' failed (offline?)")
+            raise RuntimeError(f"pack fetch for '{src}->{dst}' failed (offline?)")
         matches = {}
         for f, t in need:
             match = [p for p in available
                      if p.from_code == f and p.to_code == t]
             if not match:
-                self._no_pack.add(src)         # the index simply has no pack
-                raise RuntimeError(f"no translation pack for '{src}'")
+                bad = f if f != "en" else t    # the index simply has no pack
+                self._no_pack.add(bad)
+                raise RuntimeError(f"no translation pack for '{bad}'")
             matches[(f, t)] = match[0]
         try:
             for pack in matches.values():
                 apkg.install_from_path(pack.download())
         except Exception:
-            raise RuntimeError(f"pack download for '{src}' failed - will retry")
+            raise RuntimeError(
+                f"pack download for '{src}->{dst}' failed - will retry")
 
     def transcribe(self, audio48k, language=None):
         """48 kHz mono float32 -> (text, language code). Shared with the
@@ -456,18 +478,28 @@ class Translator:
         src = ARGOS_CODE.get(detected)
         if src is None:
             raise RuntimeError(f"can't translate from '{detected}'")
-        dst = self.target()
-        if src == dst:
+        dst = self.target()                        # UI code ("pa", ...)
+        dst_argos = ARGOS_CODE.get(dst, dst)       # Argos code ("pb", ...)
+        if src == dst_argos:
             out = text                 # same language: voice-over only
         else:
             self.phase = "translating..."
             with self.model_lock:
-                out = (self._translate(text, src, dst) or "").strip()
+                # targets beyond the preinstalled ARGOS_PAIRS (Persian,
+                # Punjabi) fetch their pack here on first use
+                self._ensure_pair(src, dst_argos)
+                out = (self._translate(text, src, dst_argos) or "").strip()
             if not out:
                 raise RuntimeError("translation came back empty")
         self.phase = "speaking..."
-        samples, wav = tts_synthesize(out, self.voice_for(dst), 0)
         self.last = f"{detected}: {text}  ->  {dst}: {out}"
+        voice = self.voice_for(dst)
+        if voice is None and not latin_script(out):
+            # the engine-default (English) voice renders this script as
+            # dead silence - name the real problem instead of "speaking" it
+            raise RuntimeError(f"no {dict(TRANS_TARGETS)[dst]} voice "
+                               "installed - see setup/get_piper_voices.py")
+        samples, wav = tts_synthesize(out, voice, 0)
         self._report(self.last[:120])
         self._route(samples, wav)
 

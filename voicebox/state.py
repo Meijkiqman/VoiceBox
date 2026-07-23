@@ -44,11 +44,13 @@ PERSIST_FIELDS = {
     "rvc_dir":       str,
     "tts_voice":     str,
     "trans_source":  str,      # translator: "auto" | "no" | "en" (None = auto)
-    "trans_target":  str,      # translator: "en" | "es" | "zh" (None = en)
+    "trans_target":  str,      # translator: TRANS_TARGETS code (None = en)
     "trans_model":   str,      # faster-whisper size (None = config default)
     "trans_voice_en": str,     # per-target TTS voice (None = auto-pick)
     "trans_voice_es": str,
     "trans_voice_zh": str,
+    "trans_voice_fa": str,
+    "trans_voice_pa": str,
     "listen_device": str,      # incoming-speech capture device (None = auto)
 }
 
@@ -125,6 +127,8 @@ class State:
         self.trans_voice_en = None    # per-target TTS voice; None = auto-pick
         self.trans_voice_es = None
         self.trans_voice_zh = None
+        self.trans_voice_fa = None
+        self.trans_voice_pa = None
         self.trans_hold = False       # capturing: outgoing voice path silent
         self.trans_tap = None         # Queue while capturing (raw mic blocks)
         self.trans_auto = False       # continuous translate (TRANS strip chip)

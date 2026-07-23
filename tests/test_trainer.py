@@ -200,6 +200,69 @@ tw.proc = live
 tw._watch(_DoneProc(0), "Nova")
 check("stale watcher ignored", tw.proc is live)
 
+# ---- logging ----------------------------------------------------------------
+import voicebox.trainer as tr_mod
+
+log_dir = Path(tempfile.mkdtemp()) / "logs"
+tr_mod.TRAIN_LOG_DIR = log_dir
+
+tl = Trainer(state, ai=None)
+tl._open_log("Train new model")
+check("log file created", tl.log_path is not None
+      and tl.log_path.parent == log_dir)
+check("log dir made on demand", log_dir.is_dir())
+
+tl._report("something went wrong")
+body = tl.log_path.read_text(encoding="utf-8")
+check("header logged", "=== Train new model ===" in body)
+check("rvc dir logged", "RVC dir" in body)
+check("status messages logged", "something went wrong" in body)
+check("lines timestamped", any(l[:2].isdigit() and l[2] == ":"
+                               for l in body.splitlines() if l.strip()))
+check("log hint names the file", tl.log_path.name in tl.log_hint())
+
+# a refusal is logged even though the flow stops immediately
+tl.ai = _FakeAi()
+tl.new_model()
+check("refusal logged",
+      "GPU" in tl.log_path.read_text(encoding="utf-8"))
+tl.ai = None
+
+# a broken Tk dialog reads as a failure, not as a cancel
+tl._ask_name = lambda: (_ for _ in ()).throw(RuntimeError("no display"))
+tl._new_model_flow()
+check("dialog crash caught", "no display" in state.status_msg
+      and "canceled" not in state.status_msg)
+check("dialog crash logged + hinted",
+      "no display" in tl.log_path.read_text(encoding="utf-8")
+      and tl.log_path.name in state.status_msg)
+
+# an unwritable log directory must not break the flow
+tl2 = Trainer(state, ai=None)
+tr_mod.TRAIN_LOG_DIR = Path("\x00bad")     # mkdir raises on every platform
+tl2._open_log("Train new model")
+check("bad log dir survives", tl2.log_path is None and tl2.log_hint() == "")
+tl2._report("still reported")
+check("status still works without a log", state.status_msg == "still reported")
+tr_mod.TRAIN_LOG_DIR = log_dir
+
+if SF_REAL:
+    # the spawned trainer is told to append to the same log
+    tl3 = Trainer(state, ai=None)
+    tl3._open_log("Train new model")
+    tl3._ask_name = lambda: "Logged"
+    tl3._ask_clips = lambda: [big]
+    tl3._watch = lambda proc, name: None
+    calls.clear()
+    tl3._new_model_flow()
+    cmd = [str(c) for c in calls[-1]]
+    check("--log passed to rvc_trainer",
+          "--log" in cmd and str(tl3.log_path) in cmd)
+    body = tl3.log_path.read_text(encoding="utf-8")
+    check("chosen clips logged", str(big) in body)
+    check("import result logged", "imported" in body)
+    check("launch command logged", "launching:" in body)
+
 # ---- the menu row -----------------------------------------------------------
 from voicebox.ui import Menu
 

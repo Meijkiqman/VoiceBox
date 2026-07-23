@@ -41,12 +41,15 @@ fw = types.ModuleType("faster_whisper")
 fw.WhisperModel = _FakeWhisper
 sys.modules["faster_whisper"] = fw
 
-DIRECT = {("nb", "en"), ("en", "es"), ("en", "zh"), ("en", "nb")}
+DIRECT = {("nb", "en"), ("en", "es"), ("en", "zh"), ("en", "nb"),
+          ("en", "fa"), ("en", "pb")}
 
 
 def _fake_translate(text, f, t):
     if (f, t) not in DIRECT:
         raise KeyError(f"{f}->{t}")
+    if t == "pb":       # Punjabi comes back in Gurmukhi (non-Latin) script
+        return "ਸਤ ਸ੍ਰੀ ਅਕਾਲ"
     return f"[{f}->{t}] {text}"
 
 
@@ -86,11 +89,12 @@ voicebox.translator.tts_synthesize = fake_synthesize
 
 from voicebox.config import SAMPLERATE
 from voicebox.state import State
-from voicebox.translator import Translator, pick_voice
+from voicebox.translator import Translator, latin_script, pick_voice
 
 VOICES = ["Microsoft Zira - English (United States)",
           "Microsoft Pablo - Spanish (Spain)",
-          "Microsoft Huihui - Chinese (Simplified, PRC)"]
+          "Microsoft Huihui - Chinese (Simplified, PRC)",
+          "Piper: Amir (fa_IR, medium)"]
 
 
 def wait_event(state, timeout=3.0):
@@ -152,6 +156,51 @@ check("chinese voice picked",
       synth_calls and synth_calls[-1][1] == VOICES[2], str(synth_calls[-1:]))
 wait_idle(tr)
 
+# ---- Persian target: pivots through English, Piper voice auto-picked ----
+with state.lock:
+    state.trans_target = "fa"
+speak_into(tr, state)
+ev = wait_event(state)
+check("persian event lands", ev is not None)
+check("persian pivoted via english", "[en->fa] [nb->en]" in tr.last, tr.last)
+check("persian voice picked",
+      synth_calls and synth_calls[-1][1] == VOICES[3], str(synth_calls[-1:]))
+wait_idle(tr)
+
+# ---- Punjabi target: no voice can speak Gurmukhi -> clear error, no
+# silent "speech"; the transcript still lands on the row ----
+with state.lock:
+    state.trans_target = "pa"
+before = state.events.qsize()
+n_synth = len(synth_calls)
+speak_into(tr, state)
+wait_idle(tr)
+check("missing voice raises", "no Punjabi voice" in state.status_msg,
+      state.status_msg)
+check("missing voice makes no event", state.events.qsize() == before)
+check("missing voice skips synth", len(synth_calls) == n_synth)
+check("transcript still shown", "ਸਤ" in tr.last, tr.last)
+check("row shows error", "error" in tr.row_label())
+
+# an explicitly chosen voice is respected - the guard only covers auto-pick
+with state.lock:
+    state.trans_voice_pa = VOICES[0]
+speak_into(tr, state)
+ev = wait_event(state)
+check("explicit voice speaks punjabi", ev is not None)
+check("explicit voice used",
+      synth_calls and synth_calls[-1][1] == VOICES[0], str(synth_calls[-1:]))
+wait_idle(tr)
+with state.lock:
+    state.trans_voice_pa = None
+    state.trans_target = None
+
+# ---- latin_script: what the default English voice can/can't render ----
+check("latin stays speakable", latin_script("hola, ¿qué tal? på deg"))
+check("gurmukhi is not", not latin_script("ਸਤ ਸ੍ਰੀ ਅਕਾਲ"))
+check("han is not", not latin_script("你好,你今天好吗?"))
+check("digits alone speakable", latin_script("123 - 456!"))
+
 # ---- same language in and out: spoken as-is, no translation ----
 with state.lock:
     state.trans_source, state.trans_target = "en", "en"
@@ -179,6 +228,8 @@ check("stale explicit falls back to hint",
       pick_voice(VOICES, "es", "Gone Voice") == VOICES[1])
 check("hint match es", pick_voice(VOICES, "es") == VOICES[1])
 check("hint match zh", pick_voice(VOICES, "zh") == VOICES[2])
+check("hint match fa", pick_voice(VOICES, "fa") == VOICES[3])
+check("no punjabi voice -> default", pick_voice(VOICES, "pa") is None)
 check("no match -> default", pick_voice(["Foo"], "zh") is None)
 check("no list -> default", pick_voice(None, "es") is None)
 

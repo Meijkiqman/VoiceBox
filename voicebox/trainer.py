@@ -10,11 +10,12 @@ import subprocess
 import sys
 import threading
 import time
+import traceback
 from pathlib import Path
 
 import numpy as np
 
-from .config import BASE_DIR, RVC_DIR, TRAINING_DIR
+from .config import BASE_DIR, RVC_DIR, TRAIN_LOG_DIR, TRAINING_DIR
 
 TRAIN_NAME = "MyVoice"        # the experiment/model name the retrain row trains
 MIN_MINUTES = 5.0             # don't bother below this much harvested data
@@ -72,6 +73,8 @@ class Trainer:
         self.harvester = harvester
         self.proc = None
         self.stage = ""       # new-model flow progress, shown as the row value
+        self.log_path = None  # this attempt's log file (training/logs/)
+        self.dialog_error = ""  # why a Tk dialog failed (vs. user cancel)
 
     @property
     def rvc_dir(self):
@@ -98,8 +101,44 @@ class Trainer:
         return "name it, pick clips"
 
     def _report(self, msg):
+        """Status line + log: every message the rows show is also written
+        to this attempt's log, so a refusal that flashed past is still
+        readable afterwards."""
         self.state.status_msg = msg
         self.state.status_at = time.time()
+        self._log(msg)
+
+    def _log(self, msg):
+        if self.log_path is None:
+            return
+        try:
+            with open(self.log_path, "a", encoding="utf-8",
+                      errors="replace") as f:
+                f.write(f"{time.strftime('%H:%M:%S')}  {msg}\n")
+        except Exception:
+            pass                       # logging must never break training
+
+    def _open_log(self, what):
+        """Start this attempt's log. Failing to open one is not fatal -
+        self.log_path stays None and _log becomes a no-op."""
+        try:
+            TRAIN_LOG_DIR.mkdir(parents=True, exist_ok=True)
+            self.log_path = (TRAIN_LOG_DIR
+                             / f"train-{time.strftime('%Y%m%d-%H%M%S')}.log")
+            self._log(f"=== {what} ===")
+            self._log(f"VoiceBox: {BASE_DIR}")
+            self._log(f"RVC dir : {self.rvc_dir}")
+        except Exception:
+            self.log_path = None
+
+    def log_hint(self):
+        """The log's location, for the tail of a failure message."""
+        if self.log_path is None:
+            return ""
+        try:
+            return f" - log: {self.log_path.relative_to(BASE_DIR)}"
+        except ValueError:
+            return f" - log: {self.log_path}"
 
     def _busy(self):
         """The refusals shared by both rows (one GPU, one training slot)."""
@@ -117,6 +156,7 @@ class Trainer:
     def launch(self):
         """Kick off training on the harvested dataset. Refuses while the AI
         voice is live (the GPU can't do both) or with too little data."""
+        self._open_log(f"Retrain AI voice ({TRAIN_NAME})")
         if self._busy():
             return False
         mins = self.harvester.minutes if self.harvester is not None else 0.0
@@ -144,6 +184,7 @@ class Trainer:
             self._report("already setting up a model - look for a dialog "
                          "window")
             return False
+        self._open_log("Train new model")
         if self._busy():
             return False
         self.stage = "see dialog..."
@@ -153,27 +194,46 @@ class Trainer:
     def _new_model_flow(self):
         try:
             self.stage = "waiting for name..."
-            name = _safe_name(self._ask_name())
+            self._log("asking for a model name (Tk dialog)")
+            raw = self._ask_name()
+            if self.dialog_error:      # Tk missing/broken: not a cancel
+                self._report(f"could not open the name dialog: "
+                             f"{self.dialog_error}{self.log_hint()}")
+                return
+            name = _safe_name(raw)
             if not name:
                 self._report("new model canceled")
                 return
+            self._log(f"model name: {name!r} (from {raw!r})")
             if (list((self.rvc_dir / "weights").glob(f"{name}*.pth"))
                     or (self.rvc_dir / "logs" / name).is_dir()):
                 self._report(f"a model called '{name}' already exists - "
                              "pick another name")
                 return
             self.stage = "choosing clips..."
+            self._log(f"asking for clips (picker opens in {TRAINING_DIR})")
             files = self._ask_clips()
+            if self.dialog_error:      # Tk missing/broken: not a cancel
+                self._report(f"could not open the clip picker: "
+                             f"{self.dialog_error}{self.log_hint()}")
+                return
             if not files:
                 self._report("new model canceled - no clips chosen")
                 return
+            self._log(f"{len(files)} clip(s) chosen:")
+            for f in files:
+                self._log(f"    {f}")
             self.stage = "importing clips..."
             dataset = self.rvc_dir / f"dataset_{name.lower()}"
+            self._log(f"importing into {dataset}")
             try:
                 kept, skipped, seconds = import_clips(files, dataset)
             except Exception as e:
-                self._report(f"import: {e}")
+                self._log(traceback.format_exc())
+                self._report(f"import: {e}{self.log_hint()}")
                 return
+            self._log(f"imported {kept} piece(s), {skipped} unreadable, "
+                      f"{seconds / 60:.2f} min total")
             skip = f" ({skipped} unreadable skipped)" if skipped else ""
             if kept < MIN_CLIPS:
                 self._report(f"only {seconds / 60:.1f} min of usable "
@@ -188,12 +248,17 @@ class Trainer:
             if self._spawn(dataset, name):
                 self._report(f"training '{name}' on {seconds / 60:.1f} min "
                              f"of clips{skip} - it runs in its own window")
+        except Exception as e:                 # never lose a flow crash
+            self._log(traceback.format_exc())
+            self._report(f"new model: {e}{self.log_hint()}")
         finally:
             self.stage = ""
 
     def _ask_name(self):
         """Native name prompt. Tk ships with CPython; the root lives on
-        this background thread, so pygame keeps running."""
+        this background thread, so pygame keeps running. A failure here
+        is recorded in dialog_error - it must not read as a cancel."""
+        self.dialog_error = ""
         try:
             import tkinter
             from tkinter import simpledialog
@@ -206,11 +271,14 @@ class Trainer:
                     parent=root)
             finally:
                 root.destroy()
-        except Exception:
+        except Exception as e:
+            self.dialog_error = str(e) or e.__class__.__name__
+            self._log(traceback.format_exc())
             return None
 
     def _ask_clips(self):
         """Native multi-file picker, opening in the training/ drop folder."""
+        self.dialog_error = ""
         try:
             import tkinter
             from tkinter import filedialog
@@ -226,7 +294,9 @@ class Trainer:
                     parent=root))
             finally:
                 root.destroy()
-        except Exception:
+        except Exception as e:
+            self.dialog_error = str(e) or e.__class__.__name__
+            self._log(traceback.format_exc())
             return []
 
     def _spawn(self, dataset, name):
@@ -234,13 +304,17 @@ class Trainer:
         cmd = [str(self.rvc_dir / "runtime" / "python.exe"),
                str(BASE_DIR / "rvc_trainer.py"),
                "--dataset", str(dataset), "--name", name]
+        if self.log_path is not None:      # the trainer appends its whole
+            cmd += ["--log", str(self.log_path)]   # run to the same file
         flags = getattr(subprocess, "CREATE_NEW_CONSOLE", 0) \
             if sys.platform == "win32" else 0
+        self._log("launching: " + " ".join(cmd))
         try:
             self.proc = subprocess.Popen(cmd, cwd=str(self.rvc_dir),
                                          creationflags=flags)
         except Exception as e:
-            self._report(f"training: {e}")
+            self._log(traceback.format_exc())
+            self._report(f"training: {e}{self.log_hint()}")
             return False
         threading.Thread(target=self._watch, args=(self.proc, name),
                          daemon=True).start()
@@ -256,11 +330,11 @@ class Trainer:
         self.proc = None
         made = list((self.rvc_dir / "weights").glob(f"{name}*.pth"))
         if code != 0:
-            self._report(f"training '{name}' failed (exit {code}) - rerun "
-                         "rvc_trainer.py from a terminal to read the errors")
+            self._report(f"training '{name}' failed (exit {code}) - the "
+                         f"reason is in the log{self.log_hint()}")
         elif not made:
-            self._report(f"training '{name}' finished but wrote no model - "
-                         "see the rvc_trainer notes in VOICE_TRAINING.md")
+            self._report(f"training '{name}' finished but wrote no model"
+                         f"{self.log_hint()}")
         else:
             if self.ai is not None:
                 try:

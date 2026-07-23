@@ -74,6 +74,21 @@ runtime\python.exe ..\rvc_trainer.py --check --dataset dataset_self
 
 The "Retrain AI voice" row runs the same script, so it will also tell you.
 
+## When a run fails: read the log
+
+Every training attempt writes `training/logs/train-<date>-<time>.log`.
+It holds the whole run - the clips you picked, the import result, the
+launch command, and every line the trainer and its sub-steps printed.
+When a run fails, VoiceBox's status line names that file; open it and the
+reason is at the bottom. The training console window also stays open on
+failure now ("press Enter to close"), so a run that dies in its first
+seconds can still be read.
+
+The most common failure is a *missing training piece*: the RVC package
+that ships with VoiceBox is inference-only, so the files listed under
+"Training pieces" below have to be copied in first. The log says exactly
+which ones are absent.
+
 ## Status: EXPERIMENTAL
 
 The trainer drives RVC's own training scripts exactly the way the RVC

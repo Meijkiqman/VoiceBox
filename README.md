@@ -46,7 +46,7 @@ Or by hand: `pip install -r requirements.txt`, then `python voicebox.py`.
   dropped into `piper/voices/` joins the pickers too.
 - **Speech translator** - flip **Auto translate** (top of the
   Translator card) and just talk: each sentence you say is transcribed, translated (English,
-  Spanish or Mandarin) and spoken into the mic in a native TTS voice - or
+  Spanish, Mandarin, Persian or Punjabi) and spoken into the mic in a native TTS voice - or
   in *your* RVC voice while the AI voice is live - while your raw voice
   stays off the cable. Ctrl+Alt+T does a one-shot capture instead.
   Offline after first-run downloads;
@@ -82,8 +82,9 @@ David is the standard male English one). For *realistic* speech, run
 `setup/Get-PiperVoices.bat` once: it installs the offline Piper neural
 engine plus six English voices - **Ryan** and **Lessac** (US, very
 natural), **Hfc Male** and **Hfc Female** (US, clean), **Alan** and
-**Cori** (British) - which appear as "Piper: ..." at the top of every
-picker (~560 MB total). Other
+**Cori** (British) - and one voice per Translate target (**Davefx**,
+Spanish; **Huayan**, Mandarin; **Amir**, Persian), all appearing as
+"Piper: ..." at the top of every picker (~760 MB total). Other
 languages/voices: grab the `.onnx` + `.onnx.json` pair from
 [the Piper voice collection](https://huggingface.co/rhasspy/piper-voices)
 into `piper/voices/`.
@@ -98,9 +99,16 @@ later - your raw voice never goes out while TRANS is on. Prefer it
 per-sentence? Tap Ctrl+Alt+T (or the Translate row) for a one-shot
 capture that sends itself the same way.
 First use downloads the Whisper model and the Argos language packs (needs
-internet once; everything runs locally after that). "Translate voice"
-auto-picks an installed Windows voice for the target language - install
-natural Spanish/Chinese voices under Settings -> Time & Language -> Speech.
+internet once per language; everything runs locally after that).
+"Translate voice" auto-picks an installed voice for the target language.
+The Windows default voices are English-only, so non-English targets need a
+voice that speaks the language: `setup/Get-PiperVoices.bat` now includes
+Spanish, Mandarin and Persian Piper voices, or install Windows ones under
+Settings -> Time & Language -> Speech. Without one the translator reports
+"no ... voice installed" rather than sending silence. Punjabi has no
+Piper or Windows voice at all - it translates (the text shows in the
+status line) but stays text-only unless you force a voice on the
+"Translate voice" row.
 With the AI voice running, translations are spoken through your RVC model
 instead (note: the worker still carries your original voice while you
 speak; pick a push-to-talk quiet moment, or run without the AI voice live).
@@ -113,9 +121,8 @@ While "Incoming speech" is on, the chat is passed through to your speakers
 untouched and non-English utterances are captioned in English at the
 bottom of the window a few seconds later (English speech needs no caption
 and gets none); "Speak incoming" reads the captions aloud too.
-Uses the same translator install; language packs beyond
-Norwegian/Spanish/Mandarin download automatically the first time someone
-speaks them.
+Uses the same translator install; language packs beyond the configured
+targets download automatically the first time someone speaks them.
 
 ## Installer
 
