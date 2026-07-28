@@ -515,7 +515,9 @@ class Translator:
             through_ai = self.ai.inject(wav)
         if not through_ai:
             self.state.events.put(("trans", samples, fx))
-        mirrored = (self.monitor is not None and self.monitor.on
-                    and not through_ai)
+        # skipped when self-listen already carries the phrase - including the
+        # AI path (worker mirror, or the chain mirror with AI voice FX on):
+        # the raw render on top would overlap it in two voices at once
+        mirrored = self.monitor is not None and self.monitor.on
         if self.player is not None and not mirrored:
             self.player.play_raw(samples)

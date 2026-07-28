@@ -259,8 +259,9 @@ class TTSBank:
     rendered speech joins the mic signal, so the whole effect chain shapes it -
     and while the AI worker is live it is fed through the worker instead,
     coming out in the AI voice. With it off the phrase mixes in clean, like a
-    soundboard clip. Either way it also plays on the speakers, so the user
-    hears what was said."""
+    soundboard clip. Either way it also plays on the speakers - unless
+    self-listen is already mirroring it - so the user hears what was said
+    exactly once."""
 
     def __init__(self, state, player=None, monitor=None, ai=None,
                  path=TTS_PHRASES_PATH):
@@ -422,10 +423,11 @@ class TTSBank:
         if not through_ai:
             self.state.events.put(("tts", samples, fx))
         # local listen, like the soundboard - skipped when self-listen already
-        # mirrors the mic mix (it would be heard doubled). The AI path is never
-        # mirrored (the worker owns the cable), so it always plays locally.
-        mirrored = (self.monitor is not None and self.monitor.on
-                    and not through_ai)
+        # carries the phrase (it would be heard doubled). That includes the AI
+        # path: with HEAR on the converted phrase reaches the speakers too -
+        # via the worker's own mirror, or the chain mirror with AI voice FX on
+        # - so playing the raw render as well would overlap it in two voices.
+        mirrored = self.monitor is not None and self.monitor.on
         if self.player is not None and not mirrored:
             self.player.play_raw(samples)
 

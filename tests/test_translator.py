@@ -324,6 +324,40 @@ except RuntimeError as e:
     check("transient fetch raises", "failed" in str(e))
 check("transient failure not blacklisted", "de" not in tr2._no_pack)
 
+# ---- regression: AI route + HEAR self-listen must not double-play ----
+# (the raw TTS render used to always hit the local speakers even when the
+# AI-converted translation was already mirrored there via self-listen -
+# heard overlapping in two voices)
+class RecPlayer:
+    def __init__(self): self.played = []
+    def play_raw(self, s): self.played.append(s)
+
+
+class MonStub:
+    def __init__(self, on): self.on = on
+
+
+class FakeAI:
+    def __init__(self): self.proc, self.injected = object(), []
+    def inject(self, wav): self.injected.append(str(wav)); return True
+
+
+tone = np.full(2400, 0.2, np.float32)
+hear_p, hear_ai = RecPlayer(), FakeAI()
+tr_hear = Translator(state, player=hear_p, monitor=MonStub(True), ai=hear_ai,
+                     voices_fn=lambda: VOICES)
+tr_hear._route(tone, "fake.wav")
+check("AI + HEAR: worker takes the translation",
+      hear_ai.injected == ["fake.wav"])
+check("AI + HEAR: local player stays quiet (no overlap)", hear_p.played == [])
+
+solo_p, solo_ai = RecPlayer(), FakeAI()
+tr_solo = Translator(state, player=solo_p, monitor=MonStub(False), ai=solo_ai,
+                     voices_fn=lambda: VOICES)
+tr_solo._route(tone, "fake.wav")
+check("AI + HEAR off: raw render still plays locally",
+      solo_ai.injected and len(solo_p.played) == 1)
+
 # ---- settings round-trip ----
 with state.lock:
     state.trans_source, state.trans_target = "no", "zh"

@@ -187,6 +187,40 @@ check("fx off bypasses the AI",
 with state.lock:
     state.tts_fx = True
 
+# ---- regression: AI route + HEAR self-listen must not double-play ----
+# (the raw render used to always hit the local speakers even when the
+# converted phrase was already mirrored there via self-listen - the same
+# phrase heard overlapping in two voices)
+class RecPlayer:
+    def __init__(self): self.played = []
+    def play_raw(self, s): self.played.append(s)
+
+
+class MonStub:
+    def __init__(self, on): self.on = on
+
+
+hear_player, hear_ai = RecPlayer(), FakeAI()
+bank_hear = voicebox.TTSBank(state, player=hear_player,
+                             monitor=MonStub(True), ai=hear_ai, path=tmp)
+bank_hear.play(0)
+t0 = time.time()
+while not hear_ai.injected and time.time() - t0 < 2.0:
+    time.sleep(0.01)
+check("AI + HEAR: worker takes the phrase", bool(hear_ai.injected))
+check("AI + HEAR: local player stays quiet (no overlap)",
+      hear_player.played == [])
+
+solo_player, solo_ai = RecPlayer(), FakeAI()
+bank_solo = voicebox.TTSBank(state, player=solo_player,
+                             monitor=MonStub(False), ai=solo_ai, path=tmp)
+bank_solo.play(0)
+t0 = time.time()
+while not solo_player.played and time.time() - t0 < 2.0:
+    time.sleep(0.01)
+check("AI + HEAR off: raw render still plays locally",
+      solo_ai.injected and len(solo_player.played) == 1)
+
 # ------------------------------------------------------------- local listen
 lp = voicebox.LocalPlayer(state)
 lp.events.put(("raw", TONE.copy()))
