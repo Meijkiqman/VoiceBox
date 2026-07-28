@@ -8,30 +8,46 @@ from scipy.signal import resample_poly
 
 from .config import CLIP_PEAK, MAX_CLIPS, SAMPLERATE, SOUNDS_DIR
 
+# decoded-clip cache keyed by (path, mtime, size): a rescan - every file
+# drag-dropped onto the window triggers one, on the UI thread - then only
+# decodes files that are actually new or changed, instead of re-decoding
+# and re-resampling the entire folder (a multi-second freeze at 64 clips)
+_clip_cache = {}
+
+
 def load_clips():
     clips, names = [], []
     if not SOUNDS_DIR.is_dir():
         return clips, names
     files = sorted(f for f in SOUNDS_DIR.iterdir()
                    if f.suffix.lower() in (".wav", ".flac", ".ogg", ".mp3"))
+    fresh = {}
     for n, f in enumerate(files):
         if len(clips) >= MAX_CLIPS:
             print(f"  soundboard full: ignoring {len(files) - n} more file(s) in sounds/")
             break
         try:
-            data, sr = sf.read(str(f), dtype="float32", always_2d=True)
+            st = f.stat()
+            key = (str(f), st.st_mtime_ns, st.st_size)
+            data = _clip_cache.get(key)
+            if data is None:
+                data, sr = sf.read(str(f), dtype="float32", always_2d=True)
+                data = data.mean(axis=1)           # downmix to mono
+                if sr != SAMPLERATE:               # resample to our rate
+                    data = resample_poly(data, SAMPLERATE,
+                                         sr).astype(np.float32)
+                if CLIP_PEAK:                      # tame internet-sourced levels
+                    peak = float(np.abs(data).max())
+                    if peak > 1e-4:
+                        data = data * min(CLIP_PEAK / peak, 4.0)
         except Exception as e:                     # one bad file must not kill startup
             print(f"  skipping {f.name}: {e}")
             continue
-        data = data.mean(axis=1)                   # downmix to mono
-        if sr != SAMPLERATE:                       # resample to our rate
-            data = resample_poly(data, SAMPLERATE, sr).astype(np.float32)
-        if CLIP_PEAK:                              # tame internet-sourced levels
-            peak = float(np.abs(data).max())
-            if peak > 1e-4:
-                data = data * min(CLIP_PEAK / peak, 4.0)
+        fresh[key] = data
         clips.append(data)
         names.append(f.stem)
+    _clip_cache.clear()                            # deleted files free their RAM
+    _clip_cache.update(fresh)
     return clips, names
 
 

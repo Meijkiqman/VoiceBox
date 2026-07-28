@@ -117,13 +117,20 @@ class Translator:
         self.last = ""               # last "heard -> said" line
         self.voices_fn = voices_fn   # () -> installed TTS voices (TTSBank's list)
         self._lock = threading.Lock()
-        self._jobs = queue.Queue()
+        # bounded: with whisper slower than the talker (CPU fallback) an
+        # unbounded backlog would translate minutes-old speech and hold
+        # megabytes of audio; _stop_capture drops the oldest instead
+        self._jobs = queue.Queue(maxsize=4)
         self._whisper = None
         self._device = "cpu"         # where whisper actually loaded
+        self._gpu_retry_at = 0.0     # when to probe the GPU again after a fall
         self._argos = None           # argostranslate.translate module when ready
         # the listener shares these models from its own thread; neither
         # whisper nor argos promises thread safety, so one lock guards both
         self.model_lock = threading.RLock()
+        self._urgent = 0             # outgoing taps waiting: the listener yields
+        self._pack_lock = threading.Lock()   # serialize Argos pack fetches
+        self._fetch_bad_until = 0.0  # network-failure backoff for pack fetches
         self._no_pack = set()        # language codes we failed to fetch packs for
         self._thread = threading.Thread(target=self._worker, daemon=True)
         self._thread.start()
@@ -316,7 +323,18 @@ class Translator:
                 self._report("translator: heard nothing")
         else:
             self.phase = "working..."
-            self._jobs.put(audio)
+            try:
+                self._jobs.put_nowait(audio)
+            except queue.Full:         # backlog: drop the OLDEST capture -
+                try:                   # stale speech is worse than a gap
+                    self._jobs.get_nowait()
+                except queue.Empty:
+                    pass
+                try:
+                    self._jobs.put_nowait(audio)
+                except queue.Full:
+                    pass
+                self._report("translator lagging - dropped an old capture")
         if self.auto:                  # continuous mode: listen right on
             self._start_capture()
 
@@ -372,7 +390,7 @@ class Translator:
                 pass
         threading.Thread(target=job, daemon=True).start()
 
-    def _load_whisper(self, cpu=False):
+    def _load_whisper(self, cpu=False, gpu_only=False):
         # explicit cuda, not "auto": auto on a machine whose CUDA runtime is
         # missing/broken quietly loads the model on the CPU in float32 - the
         # slowest possible path. cuda raises instead, and the fallback below
@@ -385,7 +403,8 @@ class Translator:
                 return WhisperModel(name, device="cuda",
                                     compute_type="float16"), "cuda"
             except Exception:
-                pass       # no CUDA runtime / half-precision unsupported
+                if gpu_only:
+                    raise  # probe failed; keep the current (CPU) model
         return WhisperModel(name, device="cpu", compute_type="int8"), "cpu"
 
     def _ensure_models(self, announce=False):
@@ -444,43 +463,61 @@ class Translator:
         outgoing path fetches en->target for targets beyond ARGOS_PAIRS.
         Only a definitive "the index has no such pack" is remembered in
         _no_pack (blaming the exotic side, never the en pivot); a network
-        hiccup stays retryable on the next utterance."""
+        hiccup stays retryable after a short backoff.
+
+        Called WITHOUT model_lock (guards itself with _pack_lock): index
+        fetch + download are network I/O that can take minutes, and holding
+        the model lock through them froze every transcription meanwhile."""
         for code in (src, dst):
             if code in self._no_pack:
                 raise RuntimeError(f"no translation pack for '{code}'")
         import argostranslate.package as apkg
-        installed = {(p.from_code, p.to_code)
-                     for p in apkg.get_installed_packages()}
-        if (src, dst) in installed:
-            return
-        need = [p for p in ((src, "en"), ("en", dst))
-                if p[0] != p[1] and p not in installed]
-        if not need:
-            return
-        try:
-            apkg.update_package_index()
-            available = apkg.get_available_packages()
-        except Exception:
-            raise RuntimeError(f"pack fetch for '{src}->{dst}' failed (offline?)")
-        matches = {}
-        for f, t in need:
-            match = [p for p in available
-                     if p.from_code == f and p.to_code == t]
-            if not match:
-                bad = f if f != "en" else t    # the index simply has no pack
-                self._no_pack.add(bad)
-                raise RuntimeError(f"no translation pack for '{bad}'")
-            matches[(f, t)] = match[0]
-        try:
-            for pack in matches.values():
-                apkg.install_from_path(pack.download())
-        except Exception:
-            raise RuntimeError(
-                f"pack download for '{src}->{dst}' failed - will retry")
+        with self._pack_lock:
+            installed = {(p.from_code, p.to_code)
+                         for p in apkg.get_installed_packages()}
+            if (src, dst) in installed:
+                return
+            need = [p for p in ((src, "en"), ("en", dst))
+                    if p[0] != p[1] and p not in installed]
+            if not need:
+                return
+            # offline backoff: without it every utterance in an uncovered
+            # language re-pays a full network timeout
+            if time.time() < self._fetch_bad_until:
+                raise RuntimeError(
+                    f"pack fetch for '{src}->{dst}' failed - backing off")
+            try:
+                apkg.update_package_index()
+                available = apkg.get_available_packages()
+            except Exception:
+                self._fetch_bad_until = time.time() + 60.0
+                raise RuntimeError(
+                    f"pack fetch for '{src}->{dst}' failed (offline?)")
+            matches = {}
+            for f, t in need:
+                match = [p for p in available
+                         if p.from_code == f and p.to_code == t]
+                if not match:
+                    bad = f if f != "en" else t   # the index has no such pack
+                    self._no_pack.add(bad)
+                    raise RuntimeError(f"no translation pack for '{bad}'")
+                matches[(f, t)] = match[0]
+            try:
+                for pack in matches.values():
+                    apkg.install_from_path(pack.download())
+            except Exception:
+                self._fetch_bad_until = time.time() + 60.0
+                raise RuntimeError(
+                    f"pack download for '{src}->{dst}' failed - will retry")
 
-    def transcribe(self, audio48k, language=None):
+    def transcribe(self, audio48k, language=None, urgent=True):
         """48 kHz mono float32 -> (text, language code). Shared with the
-        incoming listener; the caller holds no lock."""
+        incoming listener; the caller holds no lock.
+
+        urgent=True is the outgoing path (the user tapped and is waiting);
+        the listener passes urgent=False and stands back while an outgoing
+        job wants the model lock, so a backlog of incoming chat can't delay
+        the user's own translation by whole utterances."""
         audio16 = resample_poly(audio48k, 16000,
                                 SAMPLERATE).astype(np.float32)
 
@@ -494,16 +531,37 @@ class Translator:
             text = " ".join(s.text.strip() for s in segments).strip()
             return text, info
 
-        with self.model_lock:
-            try:
-                text, info = run()
-            except Exception:
-                if self._device == "cpu":
-                    raise
-                # GPU hiccup - typically VRAM taken by the live RVC worker.
-                # Rebuild on CPU int8 once and keep going; slower beats dead.
-                self._whisper, self._device = self._load_whisper(cpu=True)
-                text, info = run()
+        if urgent:
+            self._urgent += 1          # single outgoing worker: acts as a flag
+        else:
+            while self._urgent:
+                time.sleep(0.05)
+        try:
+            with self.model_lock:
+                # after a GPU fall the CPU model sticks; probe the GPU again
+                # every couple of minutes (the RVC worker freeing VRAM is the
+                # usual cure) so a hiccup doesn't cost GPU speed all session
+                if (self._device == "cpu" and self._gpu_retry_at
+                        and time.time() >= self._gpu_retry_at):
+                    try:
+                        self._whisper, self._device = self._load_whisper(
+                            gpu_only=True)
+                        self._gpu_retry_at = 0.0
+                    except Exception:
+                        self._gpu_retry_at = time.time() + 120.0
+                try:
+                    text, info = run()
+                except Exception:
+                    if self._device == "cpu":
+                        raise
+                    # GPU hiccup - typically VRAM taken by the live RVC
+                    # worker. Rebuild on CPU int8 and keep going.
+                    self._whisper, self._device = self._load_whisper(cpu=True)
+                    self._gpu_retry_at = time.time() + 120.0
+                    text, info = run()
+        finally:
+            if urgent:
+                self._urgent -= 1
         return text, (language or info.language)
 
     def translate_utterance(self, audio48k, dst="en"):
@@ -512,14 +570,14 @@ class Translator:
         translated is None when the utterance is already in dst (or empty).
         Missing language packs are fetched once on demand."""
         self._ensure_models()
-        text, detected = self.transcribe(audio48k)
+        text, detected = self.transcribe(audio48k, urgent=False)
         if not text:
             return detected, "", None
         src = ARGOS_CODE.get(detected, detected)
         if src == dst:
             return detected, text, None
+        self._ensure_pair(src, dst)    # network I/O: NOT under model_lock
         with self.model_lock:
-            self._ensure_pair(src, dst)
             out = (self._translate(text, src, dst) or "").strip()
         return detected, text, out or None
 
@@ -544,10 +602,11 @@ class Translator:
             out = text                 # same language: voice-over only
         else:
             self.phase = "translating..."
+            # targets beyond the preinstalled ARGOS_PAIRS (Persian, Punjabi)
+            # fetch their pack here on first use - network I/O, so NOT under
+            # model_lock (it would freeze the listener's transcriptions too)
+            self._ensure_pair(src, dst_argos)
             with self.model_lock:
-                # targets beyond the preinstalled ARGOS_PAIRS (Persian,
-                # Punjabi) fetch their pack here on first use
-                self._ensure_pair(src, dst_argos)
                 out = (self._translate(text, src, dst_argos) or "").strip()
             if not out:
                 raise RuntimeError("translation came back empty")

@@ -47,12 +47,14 @@ class AiFeed:
     and capped so a stalled consumer can't grow the latency unbounded."""
 
     MAX_BUF = SAMPLERATE * 2               # ~2 s cap: drop oldest audio
-    PREFILL = 4096                         # ~85 ms margin before starting
+    PREFILL = 4096                         # ~85 ms floor for the start margin
 
     def __init__(self, state):
         self.state = state
         self.lock = threading.Lock()
         self.buf = np.zeros(0, dtype=np.float32)
+        self.need = self.PREFILL           # prime threshold, grown to match
+                                           # the worker's actual burst size
         self.primed = False
         self.connected = False
         self.srv = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -102,8 +104,20 @@ class AiFeed:
                 y = lerp(x)
                 with self.lock:
                     self.buf = np.concatenate([self.buf, y])
+                    # the worker delivers a whole RVC block (~0.35 s) in one
+                    # burst: priming below one burst re-underruns the moment
+                    # a burst arrives late, clicking forever. Learn the real
+                    # burst size and keep that much margin (clear() resets).
+                    if len(y):
+                        self.need = int(max(self.need,
+                                            min(1.25 * len(y) + 2048,
+                                                SAMPLERATE)))
                     if len(self.buf) > self.MAX_BUF:
-                        self.buf = self.buf[-self.MAX_BUF:]
+                        # a stalled consumer (device switch, stream outage)
+                        # must cost one glitch, not a voice that stays 2 s
+                        # behind forever: drop the backlog, keep one margin
+                        self.buf = self.buf[-self.need:]
+                        self.primed = False
         except Exception:
             pass
 
@@ -112,7 +126,7 @@ class AiFeed:
         underrun; an underrun re-primes so playback resumes with margin)."""
         with self.lock:
             if not self.primed:
-                if len(self.buf) < self.PREFILL:
+                if len(self.buf) < self.need:
                     return np.zeros(n, dtype=np.float32)
                 self.primed = True
             take, self.buf = self.buf[:n], self.buf[n:]
@@ -124,6 +138,7 @@ class AiFeed:
     def clear(self):
         with self.lock:
             self.buf = np.zeros(0, dtype=np.float32)
+            self.need = self.PREFILL
             self.primed = False
 
     def close(self):
@@ -146,6 +161,12 @@ class AiVoice:
         self.rvc_dir = Path(rvc_dir) if rvc_dir else RVC_DIR
         self.monitor = monitor             # self-listen: worker mirrors voice
         self.proc = None
+        # UI thread and hotkey thread both drive start/stop/select; without
+        # this lock two near-simultaneous toggles both see proc None and
+        # spawn two workers, orphaning one (doubled voice, GPU held).
+        # RLock: select() restarts via stop()+start().
+        self._lock = threading.RLock()
+        self._index_cache = {}             # model path -> its .index (or "")
         self.status = "off"                # off | loading... | ON | error
         self.voices = self._scan()
         self.feed = None                   # AI-voice-FX bridge (worker -> chain)
@@ -176,17 +197,29 @@ class AiVoice:
         while VoiceBox is up. The current selection survives by name."""
         current = self.voices[self.sel] if self.voices else None
         self.voices = self._scan()
+        self._index_cache.clear()          # new training runs add indexes
         self.sel = self.voices.index(current) if current in self.voices else 0
 
     def _index_for(self, pth):
-        """Find the .index that belongs to a model (accent/timbre lookup)."""
+        """Find the .index that belongs to a model (accent/timbre lookup).
+        Scoped to the model's own logs folder plus the top of logs/ and
+        weights/ - logs/ holds thousands of per-segment training artifacts,
+        and a full rglob on every worker start cost whole seconds - and
+        cached per model (rescan() clears the cache)."""
+        key = str(pth)
+        if key in self._index_cache:
+            return self._index_cache[key]
         stem = pth.stem.lower()
+        cand = []
+        own = self.rvc_dir / "logs" / pth.stem
+        if own.is_dir():
+            cand += sorted(own.rglob("*.index"))
         for folder in (self.rvc_dir / "logs", self.rvc_dir / "weights"):
             if folder.is_dir():
-                for f in folder.rglob("*.index"):
-                    if stem in f.name.lower():
-                        return str(f)
-        return ""
+                cand += sorted(folder.glob("*.index"))
+        found = next((str(f) for f in cand if stem in f.name.lower()), "")
+        self._index_cache[key] = found
+        return found
 
     def voice_name(self):
         return self.voices[self.sel].stem if self.voices else "-"
@@ -197,15 +230,17 @@ class AiVoice:
 
     def select(self, i):
         """Jump straight to voice i (dropdown pick); live switch restarts."""
-        if not self.voices or not (0 <= i < len(self.voices)) or i == self.sel:
-            return
-        self.sel = i
-        with self.state.lock:              # per-character pitch memory
-            self.state.ai_pitch = float(
-                self.state.ai_pitches.get(self.voice_name(), 0))
-        if self.proc is not None:          # live switch: restart on new voice
-            self.stop()                    # (start() reads the recalled pitch)
-            self.start()
+        with self._lock:
+            if (not self.voices or not (0 <= i < len(self.voices))
+                    or i == self.sel):
+                return
+            self.sel = i
+            with self.state.lock:          # per-character pitch memory
+                self.state.ai_pitch = float(
+                    self.state.ai_pitches.get(self.voice_name(), 0))
+            if self.proc is not None:      # live switch: restart on new voice
+                self.stop()                # (start() reads the recalled pitch)
+                self.start()
 
     def inject(self, wav_path):
         """Feed a wav into the worker's mic input ("PLAY <path>" over stdin)
@@ -272,12 +307,17 @@ class AiVoice:
             self.set_monitor(not on)
 
     def toggle(self):
-        if self.proc is not None:
-            self.stop()
-        else:
-            self.start()
+        with self._lock:
+            if self.proc is not None:
+                self.stop()
+            else:
+                self.start()
 
     def start(self):
+        with self._lock:
+            self._start_locked()
+
+    def _start_locked(self):
         if self.proc is not None or not self.voices:
             return
         pth = self.voices[self.sel]
@@ -317,17 +357,24 @@ class AiVoice:
             self.state.status_at = time.time()
             return
         self.status = "loading..."
-        with self.state.lock:
-            self.state.ai_mute = True
+        # NOTE: ai_mute is NOT set here. The worker needs 10-30 s (torch
+        # import, model load) before it feeds the cable; muting now would
+        # leave the user in dead air the whole load. _reader mutes on
+        # "STATUS running" - the moment the worker actually owns the voice.
         threading.Thread(target=self._reader, args=(self.proc,), daemon=True).start()
 
     def _reader(self, proc):
         """Follow one worker's stdout (also keeps its pipe from filling)."""
         try:
             for line in proc.stdout:
+                if proc is not self.proc:
+                    continue           # stale worker: drain, but its buffered
+                                       # STATUS lines are yesterday's news
                 line = line.strip()
                 if line.startswith("STATUS running"):
                     self.status = "ON"
+                    with self.state.lock:
+                        self.state.ai_mute = True
                     if self.state.cues is not None:
                         self.state.cues.ai_ready()
                 elif line.startswith("STATUS error"):
@@ -346,17 +393,18 @@ class AiVoice:
                 self.state.ai_mute = False
 
     def stop(self):
-        proc, self.proc = self.proc, None
-        if proc is not None:
-            try:
-                proc.terminate()
-            except Exception:
-                pass
-        self.status = "off"
-        if self.feed is not None:
-            self.feed.clear()
-        with self.state.lock:
-            self.state.ai_mute = False
+        with self._lock:
+            proc, self.proc = self.proc, None
+            if proc is not None:
+                try:
+                    proc.terminate()
+                except Exception:
+                    pass
+            self.status = "off"
+            if self.feed is not None:
+                self.feed.clear()
+            with self.state.lock:
+                self.state.ai_mute = False
 
     def close(self):
         """Shutdown: stop the worker and release the FX bridge socket."""

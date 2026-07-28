@@ -127,7 +127,11 @@ def install_voices():
             print(f"voice:  {name} FAILED ({e})")
             failed.append(name)
             continue
-        dest.write_bytes(data)
+        # write via a temp name + rename: a Ctrl+C mid-write must not leave
+        # a truncated .onnx that every re-run then reports "already present"
+        part = dest.with_suffix(dest.suffix + ".part")
+        part.write_bytes(data)
+        part.replace(dest)
         print(f"voice:  {name} installed")
     if failed:
         print("\nsome voice downloads failed - grab them manually from")

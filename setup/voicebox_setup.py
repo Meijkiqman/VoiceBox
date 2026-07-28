@@ -33,8 +33,9 @@ PYTHON_URL = (f"https://www.python.org/ftp/python/{PYTHON_VERSION}/"
               f"python-{PYTHON_VERSION}-amd64.exe")
 CABLE_URL = "https://download.vb-audio.com/Download_CABLE/VBCABLE_Driver_Pack45.zip"
 PACKAGES = ["numpy", "scipy", "sounddevice", "soundfile", "pygame", "keyboard"]
-APP_FILES = ["voicebox.py", "rvc_worker.py", "controls.json", "VoiceBox.bat",
-             "requirements.txt"]
+APP_FILES = ["voicebox.py", "rvc_worker.py", "rvc_trainer.py",
+             "controls.json", "VoiceBox.bat", "requirements.txt",
+             "requirements-translator.txt"]
 APP_DIRS = ["voicebox", "assets"]      # the app package + bundled fonts
 INSTALL_DIR = Path(os.environ.get("LOCALAPPDATA", str(Path.home()))) / "VoiceBox"
 
@@ -172,9 +173,13 @@ def step_cable(report, skip):
     if not setup_exe.is_file():
         raise RuntimeError("VBCABLE_Setup_x64.exe missing from the driver pack")
     say("    running silent driver install (UAC prompt: click Yes)...")
-    # -i = install, -h = hidden/silent; the driver installer must run elevated
-    r = ps(f"Start-Process -FilePath '{setup_exe}' -ArgumentList '-i','-h' "
-           f"-Verb RunAs -Wait; $LASTEXITCODE")
+    # -i = install, -h = hidden/silent; the driver installer must run elevated.
+    # -PassThru is the only way to see the INSTALLER's exit code - without it
+    # only powershell's own (always 0) comes back and a failed install would
+    # print success and send the user into a pointless reboot.
+    r = ps(f"$p = Start-Process -FilePath '{setup_exe}' "
+           f"-ArgumentList '-i','-h' -Verb RunAs -Wait -PassThru; "
+           f"exit $p.ExitCode")
     if r.returncode != 0:
         raise RuntimeError("driver install was cancelled or failed")
     say("    VB-CABLE installed. IMPORTANT: reboot before first use!")

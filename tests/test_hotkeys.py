@@ -150,8 +150,13 @@ stub_ai = StubAI()
 hk = voicebox.GlobalHotkeys(state, voicebox.Board(state),
                             {"global": {"ai_voice": "ctrl+alt+a"}}, ai=stub_ai)
 check("AI voice hotkey registered", len(fake.hotkeys) == 1)
+import time
+
 fake.fire("ctrl+alt+a")
 fake.fire("ctrl+alt+a")
+t0 = time.time()                       # slow bindings run on hk's worker
+while stub_ai.toggles < 2 and time.time() - t0 < 2.0:
+    time.sleep(0.01)
 check("AI voice hotkey toggles the worker", stub_ai.toggles == 2)
 hk.close()
 
@@ -175,6 +180,9 @@ hk = voicebox.GlobalHotkeys(state, voicebox.Board(state),
                             scenes=stub_scenes)
 check("scene hotkey registered", len(fake.hotkeys) == 1)
 fake.fire("ctrl+alt+s")
+t0 = time.time()                       # slow bindings run on hk's worker
+while not stub_scenes.cycled and time.time() - t0 < 2.0:
+    time.sleep(0.01)
 check("scene hotkey steps to the next scene", len(stub_scenes.cycled) == 1)
 hk.close()
 

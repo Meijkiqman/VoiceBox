@@ -84,11 +84,12 @@ try:
           "--pth" in FakeProc.last.cmd and "--index" in FakeProc.last.cmd
           and str(root / "weights" / "ArthurMorgan.pth") in FakeProc.last.cmd)
     check("start reports loading", ai.status == "loading...")
-    check("start mutes VoiceBox voice", state.ai_mute is True)
+    check("voice stays live while the worker loads", state.ai_mute is False)
 
     FakeProc.last.stdout.q.put("STATUS running sr=40000 block=14000\n")
     time.sleep(0.3)
     check("worker running -> status ON", ai.status == "ON")
+    check("worker running mutes VoiceBox voice", state.ai_mute is True)
     check("worker ready fires the ready cue", "ready" in state.cues.calls)
 
     running = FakeProc.last

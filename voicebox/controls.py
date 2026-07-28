@@ -1,5 +1,7 @@
 """Input bindings (controls.json) and the system-wide hotkeys."""
 import json
+import queue
+import threading
 import time
 
 from .config import CONTROLS_PATH, DEFAULT_CONTROLS
@@ -44,8 +46,25 @@ class GlobalHotkeys:
         self._kb = None                # the keyboard module while registered
         self._handles = []
         self._hooks = []               # PTT press/release hooks (unhook to undo)
+        # the keyboard package runs EVERY handler on one dispatch thread:
+        # slow bindings (AI toggle spawns a worker process, a scene switch
+        # restarts it) would block PTT/mute for seconds if run inline, so
+        # they are deferred onto this worker instead
+        self._slow = queue.Queue()
+        threading.Thread(target=self._slow_loop, daemon=True).start()
         if self.cfg.get("enabled", True):
             self.enable()
+
+    def _slow_loop(self):
+        while True:
+            fn = self._slow.get()
+            try:
+                fn()
+            except Exception:
+                pass                   # a binding crash must not kill hotkeys
+
+    def _defer(self, fn):
+        return lambda: self._slow.put(fn)
 
     @property
     def on(self):
@@ -67,9 +86,10 @@ class GlobalHotkeys:
         if self.cfg.get("mute"):
             out.append((str(self.cfg["mute"]), self._toggle_mute))
         if self.cfg.get("ai_voice") and self.ai is not None:
-            out.append((str(self.cfg["ai_voice"]), self.ai.toggle))
+            out.append((str(self.cfg["ai_voice"]), self._defer(self.ai.toggle)))
         if self.cfg.get("next_scene") and self.scenes is not None:
-            out.append((str(self.cfg["next_scene"]), self.scenes.cycle))
+            out.append((str(self.cfg["next_scene"]),
+                        self._defer(self.scenes.cycle)))
         if self.cfg.get("translate") and self.translator is not None:
             out.append((str(self.cfg["translate"]), self.translator.toggle))
         return out

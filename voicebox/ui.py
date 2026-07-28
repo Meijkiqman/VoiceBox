@@ -611,7 +611,11 @@ def run_ui(state, stop_flag, dev_line, err_line="", monitor=None, board=None,
         surf = text_cache.get(key)
         if surf is None:
             if len(text_cache) > 900:
-                text_cache.clear()
+                # drop the oldest half (insertion order) - a full clear()
+                # would force EVERY visible string to re-render on one
+                # frame, a recurring spike driven by the per-frame dB text
+                for k in list(text_cache)[:450]:
+                    del text_cache[k]
             surf = fnt.render(s, True, color)
             text_cache[key] = surf
         return surf
@@ -829,6 +833,10 @@ def run_ui(state, stop_flag, dev_line, err_line="", monitor=None, board=None,
 
     fsel = 0        # first stop: the scene chip when scenes exist, else the
                     # first card header
+    focus_track = False   # True right after keyboard/gamepad nav only: the
+                          # scroll clamp then brings the focused row into
+                          # view ONCE - clamping every frame would fight the
+                          # mouse wheel (hover moves focus) and freeze it
 
     def focus_stop():
         return focus_stops[fsel] if 0 <= fsel < len(focus_stops) else None
@@ -839,20 +847,22 @@ def run_ui(state, stop_flag, dev_line, err_line="", monitor=None, board=None,
             menu.sel = st[1]
 
     def focus_move(d):
-        nonlocal fsel
+        nonlocal fsel, focus_track
         if focus_stops:
             fsel = (fsel + d) % len(focus_stops)
+            focus_track = True
             focus_sync()
 
     def focus_tab(d=1):
         """Cycle card headers directly (TAB / gamepad shoulders)."""
-        nonlocal fsel
+        nonlocal fsel, focus_track
         hdrs = [k for k, s in enumerate(focus_stops) if s[0] == "hdr"]
         if not hdrs:
             return
         later = [k for k in hdrs if (k - fsel) * d > 0] if d > 0 else \
                 [k for k in reversed(hdrs) if k < fsel]
         fsel = (later[0] if later else (hdrs[0] if d > 0 else hdrs[-1]))
+        focus_track = True
         focus_sync()
 
     def focus_row(i):
@@ -1247,8 +1257,13 @@ def run_ui(state, stop_flag, dev_line, err_line="", monitor=None, board=None,
         tts_scroll = step(tts_scroll, tts_target, dt, 0.14)
         screen.set_clip(tts_list_rect.clip(cards_area))
         tts_playing = {}
-        sample_row = {id(tts.samples[t]): i for i, t in enumerate(tts.phrases)
-                      if t in tts.samples}
+        # .get, never check-then-index: a scene hotkey can invalidate() the
+        # bank (clearing samples) between the two from its own thread
+        sample_row = {}
+        for i, t in enumerate(tts.phrases):
+            smp_ = tts.samples.get(t)
+            if smp_ is not None:
+                sample_row[id(smp_)] = i
         for v in list(state.tts_voices):
             try:
                 samples, cur = v[0], v[1]
@@ -1295,8 +1310,9 @@ def run_ui(state, stop_flag, dev_line, err_line="", monitor=None, board=None,
                              dr.centery - xs.get_height() // 2))
             tts_del_hit[i] = dr
             st_ = tts.status.get(text, "")
-            if st_ == "ready" and text in tts.samples:
-                dur = T(f_small, f"{len(tts.samples[text]) / SAMPLERATE:.1f}s",
+            smp = tts.samples.get(text)    # .get: invalidate() may clear mid-frame
+            if st_ == "ready" and smp is not None:
+                dur = T(f_small, f"{len(smp) / SAMPLERATE:.1f}s",
                         CLR["accent"] if prog is not None else CLR["faint"])
             elif st_ == "error":
                 dur = T(f_small, "err", CLR["danger"])
@@ -2097,13 +2113,15 @@ def run_ui(state, stop_flag, dev_line, err_line="", monitor=None, board=None,
 
         # ------------------------------------------------------- feature cards
         st = focus_stop()
-        if st is not None and fsel in stop_y and stop_y[fsel] >= 0:
+        if (focus_track and st is not None and fsel in stop_y
+                and stop_y[fsel] >= 0):
             area_h = cards_area.height
             y0, y1 = stop_y[fsel], stop_y[fsel] + ROW_HGT + CARD_GAP
             if y0 - cards_target < 6:
                 cards_target = max(0.0, y0 - 6)
             elif y1 - cards_target > area_h - 6:
                 cards_target = y1 - (area_h - 6)
+        focus_track = False            # one clamp per nav, then hands off
         cards_target = max(0.0, min(cards_target,
                                     max(0.0, cards_content_h - cards_area.height + 8)))
         cards_scroll = step(cards_scroll, cards_target, dt, 0.14)

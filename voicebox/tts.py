@@ -80,18 +80,28 @@ class _PiperProc:
     def alive(self):
         return self.proc.poll() is None
 
-    def synth(self, text, wav_path, timeout=120):
-        """Render one phrase (blocking); returns once the wav is written."""
+    def synth(self, text, wav_path, timeout=15):
+        """Render one phrase (blocking); returns once the wav is written.
+        timeout: a healthy sentence renders well under 5 s - a wedged piper
+        must not freeze the translator for minutes."""
         with self.lock:
             self.proc.stdin.write(json.dumps(
                 {"text": " ".join(str(text).split()),
                  "output_file": str(wav_path)}, ensure_ascii=False) + "\n")
             self.proc.stdin.flush()
-            # any synth failure kills this process (see _synth_piper), so
-            # the first echoed line always belongs to this request
-            line = self.lines.get(timeout=timeout)
-            if line is None:
-                raise RuntimeError("piper died")
+            deadline = time.time() + timeout
+            while True:
+                left = deadline - time.time()
+                if left <= 0:
+                    raise RuntimeError("piper timed out")
+                line = self.lines.get(timeout=left)
+                if line is None:
+                    raise RuntimeError("piper died")
+                # only OUR echoed wav path is the completion signal - a
+                # stray warning line must not release us before the wav
+                # is fully written
+                if Path(line) == Path(str(wav_path)):
+                    return
 
     def close(self):
         try:
@@ -105,9 +115,11 @@ _piper_procs = {}                      # {(onnx, length_scale): _PiperProc}
 
 
 def _piper_proc_for(exe, onnx, ls):
-    """The live server for a voice, spawned on first use. At most two stay
-    resident (say, the translator's voice plus the TTS voice) - each holds
-    a full voice model in RAM - evicting the least recently used."""
+    """The live server for a voice, spawned on first use. A few stay
+    resident (TTS voice + translator voice + listener captions, possibly at
+    different rates - each holds a voice model in RAM), evicting the least
+    recently used. A proc mid-render for another thread is never evicted:
+    killing it would fail that synth and force a double respawn."""
     key = (str(onnx), round(ls, 3))
     with _piper_lock:
         p = _piper_procs.pop(key, None)
@@ -117,8 +129,12 @@ def _piper_proc_for(exe, onnx, ls):
         if p is None:
             p = _PiperProc(exe, onnx, ls)
         _piper_procs[key] = p          # (re)insert = most recently used
-        while len(_piper_procs) > 2:
-            _piper_procs.pop(next(iter(_piper_procs))).close()
+        while len(_piper_procs) > 4:
+            victim = next((k for k, v in _piper_procs.items()
+                           if v is not p and not v.lock.locked()), None)
+            if victim is None:
+                break                  # everything is mid-render: keep all
+            _piper_procs.pop(victim).close()
         return p
 
 
@@ -272,7 +288,12 @@ def synth_tts_wav(text, wav_path, voice=None, rate=0):
 
 # Lists both engines: SAPI5 (System.Speech) first, then OneCore (WinRT) - the
 # latter wrapped in try/catch so an older Windows without it just yields SAPI.
+# UTF-8 output: PowerShell writes redirected stdout in the console's OEM
+# codepage by default, which garbles non-ASCII voice names ("Bokmål" ->
+# mojibake) - and a garbled name then never matches in _WIN_TTS_PS, so the
+# user's picked voice silently falls back to the default.
 _WIN_LIST_PS = r"""
+[Console]::OutputEncoding = [System.Text.Encoding]::UTF8
 Add-Type -AssemblyName System.Speech
 (New-Object System.Speech.Synthesis.SpeechSynthesizer).GetInstalledVoices() |
     Where-Object { $_.Enabled } | ForEach-Object { $_.VoiceInfo.Name }
@@ -303,7 +324,8 @@ def list_tts_voices():
 
 
 def _list_os_voices():
-    kw = dict(text=True, capture_output=True, timeout=20,
+    kw = dict(encoding="utf-8", errors="replace", capture_output=True,
+              timeout=20,
               creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
     try:
         if sys.platform == "win32":
@@ -321,6 +343,26 @@ def _list_os_voices():
         return []
 
 
+def prune_tts_cache(max_mb=300):
+    """Trim tts_cache/ to max_mb, oldest first (run in the background at
+    startup). Saved phrases re-cache cheaply, but every translated utterance
+    and spoken caption also writes a wav here - fresh text that never hits
+    the cache again - so without a cap the folder grows forever."""
+    try:
+        wavs = sorted(TTS_CACHE_DIR.glob("*.wav"),
+                      key=lambda p: p.stat().st_mtime)
+        total = sum(p.stat().st_size for p in wavs)
+        while wavs and total > max_mb * 1024 * 1024:
+            p = wavs.pop(0)
+            try:
+                total -= p.stat().st_size
+                p.unlink()
+            except OSError:
+                pass                   # in use / already gone: skip it
+    except OSError:
+        pass
+
+
 def tts_cache_path(text, voice=None, rate=0):
     """Cache file for a (voice, rate, text) rendering - changing the voice
     or rate must not serve stale audio, so they are part of the key."""
@@ -335,13 +377,22 @@ def tts_synthesize(text, voice=None, rate=0):
     across restarts."""
     TTS_CACHE_DIR.mkdir(exist_ok=True)
     wav = tts_cache_path(text, voice, rate)
-    if not wav.is_file():
+    for retry in (False, True):
+        if retry or not wav.is_file():
+            try:
+                synth_tts_wav(text, wav, voice, rate)
+            except BaseException:              # incl. timeout: no half-written wavs
+                wav.unlink(missing_ok=True)
+                raise
         try:
-            synth_tts_wav(text, wav, voice, rate)
-        except BaseException:                  # incl. timeout: no half-written wavs
+            data, sr = sf.read(str(wav), dtype="float32", always_2d=True)
+            break
+        except Exception:
+            # a truncated cache file (piper killed mid-write) must not be
+            # served - or fail - forever: drop it and render once more
             wav.unlink(missing_ok=True)
-            raise
-    data, sr = sf.read(str(wav), dtype="float32", always_2d=True)
+            if retry:
+                raise
     data = data.mean(axis=1)
     if sr != SAMPLERATE:
         data = resample_poly(data, SAMPLERATE, sr).astype(np.float32)
@@ -375,6 +426,10 @@ class TTSBank:
         self._voices_kicked = False
         self._gen = 0                 # bumped by invalidate(): synth jobs still
                                       # in flight then drop their (stale) result
+        self._gen_lock = threading.Lock()  # makes check-gen-and-publish atomic
+        # warm() kicks every phrase at once: without a cap that is N
+        # simultaneous engine processes (PowerShell/piper) at startup
+        self._synth_sem = threading.Semaphore(2)
 
     def _load(self):
         try:
@@ -420,11 +475,12 @@ class TTSBank:
     def invalidate(self):
         """Voice/rate changed: rendered speech is stale. Phrases stay; the
         next play re-synthesizes (disk cache makes switching back instant)."""
-        self._gen += 1                 # in-flight jobs hold old-voice audio
-        self.samples.clear()
-        self.wav_path.clear()
-        self.status.clear()
-        self.pending = None
+        with self._gen_lock:           # no in-flight job may publish mid-clear
+            self._gen += 1             # in-flight jobs hold old-voice audio
+            self.samples.clear()
+            self.wav_path.clear()
+            self.status.clear()
+            self.pending = None
 
     def _synth_job(self, text):
         gen = self._gen
@@ -432,7 +488,8 @@ class TTSBank:
             with self.state.lock:
                 voice = getattr(self.state, "tts_voice", None)
                 rate = getattr(self.state, "tts_rate", 0)
-            samples, wav = tts_synthesize(text, voice, rate)
+            with self._synth_sem:      # cap concurrent engine processes
+                samples, wav = tts_synthesize(text, voice, rate)
         except Exception as e:
             if gen != self._gen:       # settings moved on mid-render: a fresh
                 return                 # job owns this phrase now, stay out
@@ -441,16 +498,20 @@ class TTSBank:
                 self.pending = None
             self._report(f"TTS: {str(e)[:70]}")
             return
-        if gen != self._gen:
-            # the voice/rate changed while rendering: this audio is the OLD
-            # voice - marking it ready would speak the wrong voice until the
-            # next invalidate. Drop it; the next play re-synthesizes.
-            return
-        self.samples[text] = samples
-        self.wav_path[text] = wav
-        self.status[text] = "ready"
-        if self.pending == text:
-            self.pending = None
+        # atomically with invalidate(): a bump between the gen check and the
+        # publish would mark OLD-voice audio ready, speaking the wrong voice
+        with self._gen_lock:
+            if gen != self._gen:
+                # the voice/rate changed while rendering: this audio is the
+                # OLD voice. Drop it; the next play re-synthesizes.
+                return
+            self.samples[text] = samples
+            self.wav_path[text] = wav
+            self.status[text] = "ready"
+            play_now = self.pending == text
+            if play_now:
+                self.pending = None
+        if play_now:
             self._route(text)
 
     def add(self, text):

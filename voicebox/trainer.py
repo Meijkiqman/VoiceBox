@@ -157,6 +157,9 @@ class Trainer:
         """Kick off training on the harvested dataset. Refuses while the AI
         voice is live (the GPU can't do both) or with too little data."""
         self._open_log(f"Retrain AI voice ({TRAIN_NAME})")
+        if self.stage:                 # a new-model setup is mid-dialog: its
+            self._report("finish the new-model dialogs first")
+            return False               # flow will spawn a training of its own
         if self._busy():
             return False
         mins = self.harvester.minutes if self.harvester is not None else 0.0
@@ -241,10 +244,8 @@ class Trainer:
                              "(~2 min, 10+ is much better); add clips to "
                              "the training folder and retry")
                 return
-            if self.ai is not None and self.ai.proc is not None:
-                self._report("turn off the AI voice first - training needs "
-                             "the GPU")
-                return
+            if self._busy():           # re-check: another training or the AI
+                return                 # voice may have started mid-dialog
             if self._spawn(dataset, name):
                 self._report(f"training '{name}' on {seconds / 60:.1f} min "
                              f"of clips{skip} - it runs in its own window")

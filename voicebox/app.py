@@ -15,7 +15,7 @@ from .soundboard import Board
 from .state import State, load_settings, save_settings, settings_autosave
 from .trainer import Trainer
 from .translator import Translator
-from .tts import TTSBank, piper_shutdown
+from .tts import TTSBank, piper_shutdown, prune_tts_cache
 from .ui import run_ui
 
 def main():
@@ -40,6 +40,7 @@ def main():
     ai = AiVoice(state, monitor=monitor)
     tts = TTSBank(state, player, monitor, ai)
     tts.warm()                    # synthesize saved phrases in the background
+    threading.Thread(target=prune_tts_cache, daemon=True).start()
     scenes = Scenes(state, ai, tts)
     translator = Translator(state, player=player, monitor=monitor, ai=ai,
                             voices_fn=lambda: tts.voice_names)
@@ -67,6 +68,8 @@ def main():
     except KeyboardInterrupt:
         pass
     finally:
+        stop_flag.set()               # first: the autosave thread must not
+                                      # interleave a write with the final save
         save_settings(state.snapshot())
         recorder.close()               # before the stream: flush what's queued
         listener.stop()

@@ -55,13 +55,20 @@ class Listener:
         except Exception:
             return []
 
-    def _auto_device(self):
+    def _auto_device(self, _cache=[0.0, None]):
         """A second-cable output side, if one is installed. Never the primary
-        "CABLE Output" - that would capture the user's own converted voice."""
-        for name in self._input_names():
-            if any(h in name.lower() for h in LISTEN_DEVICE_HINTS):
-                return name
-        return None
+        "CABLE Output" - that would capture the user's own converted voice.
+        Cached a few seconds: the Listen-device row calls this every frame,
+        and sd.query_devices() enumerating every host API 30x/s is real CPU
+        on a machine that is also running real-time audio."""
+        now = time.time()
+        if now - _cache[0] > 5.0:
+            _cache[0] = now
+            _cache[1] = next(
+                (name for name in self._input_names()
+                 if any(h in name.lower() for h in LISTEN_DEVICE_HINTS)),
+                None)
+        return _cache[1]
 
     def device_options(self):
         return [None] + self._input_names()
@@ -268,7 +275,17 @@ class Listener:
                     try:
                         jobs.put_nowait(utt)
                     except queue.Full:
-                        pass           # translation lagging: skip, stay live
+                        # translation lagging: drop the OLDEST queued
+                        # utterance, not this fresh one - captions should
+                        # trail live chat, not replay minutes-old speech
+                        try:
+                            jobs.get_nowait()
+                        except queue.Empty:
+                            pass
+                        try:
+                            jobs.put_nowait(utt)
+                        except queue.Full:
+                            pass
 
     # ---- translation worker ----
 

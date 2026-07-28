@@ -1,5 +1,6 @@
 """Shared runtime state and its persistence (settings.json, user presets)."""
 import json
+import os
 import queue
 import threading
 from pathlib import Path
@@ -64,9 +65,19 @@ def load_settings(path=SETTINGS_PATH):
         return {}
 
 
+def write_json_atomic(path, obj):
+    """Write JSON via a temp file + rename: a crash or power cut mid-write
+    must never truncate the live file (a truncated settings.json makes
+    load_settings return {} and silently resets every setting)."""
+    path = Path(path)
+    tmp = path.with_suffix(path.suffix + ".tmp")
+    tmp.write_text(json.dumps(obj, indent=2), encoding="utf-8")
+    os.replace(tmp, path)
+
+
 def save_settings(data, path=SETTINGS_PATH):
     try:
-        Path(path).write_text(json.dumps(data, indent=2), encoding="utf-8")
+        write_json_atomic(path, data)
     except OSError:
         pass                                   # read-only install dir: run on
 
@@ -89,10 +100,8 @@ def load_user_presets(path=USER_PRESETS_PATH):
 
 def save_user_presets(presets, path=USER_PRESETS_PATH):
     try:
-        Path(path).write_text(
-            json.dumps([{"name": n, "params": p} for n, p in presets],
-                       indent=2),
-            encoding="utf-8")
+        write_json_atomic(path,
+                          [{"name": n, "params": p} for n, p in presets])
     except OSError:
         pass
 

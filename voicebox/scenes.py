@@ -37,11 +37,10 @@ def load_scenes(path=SCENES_PATH):
 
 
 def save_scenes(scenes, path=SCENES_PATH):
+    from .state import write_json_atomic       # local: avoid an import cycle
     try:
-        Path(path).write_text(
-            json.dumps([{"name": n, "params": p} for n, p in scenes],
-                       indent=2),
-            encoding="utf-8")
+        write_json_atomic(path,
+                          [{"name": n, "params": p} for n, p in scenes])
     except OSError:
         pass                                   # read-only install dir: run on
 

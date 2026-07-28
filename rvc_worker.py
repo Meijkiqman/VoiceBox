@@ -334,8 +334,16 @@ if __name__ == "__main__":
     print(f"STATUS running sr={sr} block={block_frame} device={device}", flush=True)
     try:
         with sd.Stream(device=(in_dev, out_dev), channels=2, callback=callback,
-                       blocksize=block_frame, samplerate=sr, dtype="float32"):
+                       blocksize=block_frame, samplerate=sr,
+                       dtype="float32") as stream:
             while True:
                 time.sleep(1)
+                if not stream.active:
+                    # device unplugged / stream aborted: exit so VoiceBox's
+                    # reader sees the death and unmutes its own voice path,
+                    # instead of an "ON" worker silently carrying nothing
+                    print("STATUS error audio stream stopped "
+                          "(device removed?)", flush=True)
+                    break
     except KeyboardInterrupt:
         pass

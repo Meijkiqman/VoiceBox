@@ -111,7 +111,8 @@ def make_callback(state):
             # chain, so saved phrases remain usable as a stand-in voice
             x = np.zeros(frames, dtype=np.float32)
         else:
-            x = indata[:, 0].astype(np.float32) * voice_gain
+            # indata is already float32: the multiply alone makes our copy
+            x = indata[:, 0] * voice_gain
             if gate_on:                    # gate the mic only, never the TTS
                 x = state.gate_fx.process(x, gate_db)
 
@@ -125,11 +126,16 @@ def make_callback(state):
 
             y = np.concatenate([carry, y]) if len(carry) else y
             if len(y) < frames:
-                y = np.concatenate([y, np.zeros(frames - len(y), np.float32)])
+                # under-produced (shifter still priming): pad at the FRONT -
+                # trailing zeros would cut a silent gap into the middle of
+                # the stream (a click); leading ones just delay the onset
+                y = np.concatenate([np.zeros(frames - len(y), np.float32), y])
                 carry = np.zeros(0, dtype=np.float32)
-            else:
+            elif len(y) > frames:
                 carry = y[frames:].copy()    # keep the remainder, never drop audio
                 y = y[:frames].copy()
+            else:
+                carry = np.zeros(0, dtype=np.float32)
 
             # helmet doubler: short full-mix single repeat (recipe's Delay stage)
             if doubler > 1e-3:
@@ -174,17 +180,19 @@ def make_callback(state):
 
         np.clip(y, -1.0, 1.0, out=y)          # prevent hard clipping distortion
         q = state.monitor_q                    # mirror to self-listen, if enabled
-        if q is not None:
-            try:
-                q.put_nowait(y.copy())
-            except queue.Full:
-                pass                           # listener lagging: drop, never block
         rq = state.record_q                    # mirror to the recorder, if on
-        if rq is not None:
-            try:
-                rq.put_nowait(y.copy())
-            except queue.Full:
-                pass                           # writer lagging: drop, never block
+        if q is not None or rq is not None:
+            mirror = y.copy()          # both consumers only read: share one copy
+            if q is not None:
+                try:
+                    q.put_nowait(mirror)
+                except queue.Full:
+                    pass                       # listener lagging: drop, never block
+            if rq is not None:
+                try:
+                    rq.put_nowait(mirror)
+                except queue.Full:
+                    pass                       # writer lagging: drop, never block
         outdata[:, 0] = y
     return callback
 
@@ -256,6 +264,10 @@ class AudioEngine:
                 except queue.Empty:
                     break
             self.state.events.put(("pitch", self.state.semitones))
+            feed = getattr(self.state, "ai_feed", None)
+            if feed is not None:
+                feed.clear()           # AI-FX audio piled up while no stream
+                                       # was draining it: start fresh, not late
             # latency="high" buys buffering headroom: Python-side hiccups (GC,
             # UI thread holding the GIL) then cause no dropouts. Adds ~20 ms -
             # fine for voice chat, and far better than cutting out.
@@ -263,7 +275,11 @@ class AudioEngine:
                                dtype="float32", channels=CHANNELS,
                                device=(in_dev, out_dev), latency="high",
                                callback=make_callback(self.state))
-            stream.start()
+            try:
+                stream.start()
+            except Exception:
+                stream.close()         # a failed start must not leak the handle
+                raise
             self.stream = stream
             try:                       # duplex streams report (input, output)
                 lat = stream.latency
@@ -380,10 +396,15 @@ class Monitor:
                         y = np.concatenate([y, np.zeros(frames - len(y), np.float32)])
                     outdata[:, 0] = y[:frames]
 
-                self.stream = sd.OutputStream(
+                stream = sd.OutputStream(
                     samplerate=SAMPLERATE, blocksize=BLOCKSIZE, dtype="float32",
                     channels=CHANNELS, callback=cb)
-                self.stream.start()
+                try:
+                    stream.start()
+                except Exception:
+                    stream.close()
+                    raise
+                self.stream = stream
                 self.state.monitor_q = q
                 self.fallback = False
             else:
@@ -396,11 +417,16 @@ class Monitor:
                     except queue.Empty:
                         break
                 self.state.events.put(("pitch", self.state.semitones))
-                self.stream = sd.Stream(
+                stream = sd.Stream(
                     samplerate=SAMPLERATE, blocksize=BLOCKSIZE, dtype="float32",
                     channels=CHANNELS, latency="high",
                     callback=make_callback(self.state))
-                self.stream.start()
+                try:
+                    stream.start()
+                except Exception:
+                    stream.close()
+                    raise
+                self.stream = stream
                 self.fallback = True
             self.error = ""
         except Exception as e:
@@ -447,14 +473,21 @@ class LocalPlayer:
     def _ensure_locked(self):
         if self.stream is not None:
             return True
+        stream = None
         try:
-            self.stream = sd.OutputStream(
+            stream = sd.OutputStream(
                 samplerate=SAMPLERATE, blocksize=BLOCKSIZE, dtype="float32",
                 channels=CHANNELS, callback=self._callback)
-            self.stream.start()
+            stream.start()
+            self.stream = stream
             self.error = ""
             return True
         except Exception as e:
+            if stream is not None:
+                try:
+                    stream.close()
+                except Exception:
+                    pass
             self.stream = None
             self.error = str(e)
             return False
@@ -565,7 +598,9 @@ class Recorder:
             return
         self.state.record_q = None     # callback stops feeding first
         self._stop.set()
-        self._thread.join(timeout=3.0)
+        # short join: the queue holds <1 s of audio and the writer is a
+        # daemon - a hitching disk must not freeze the UI thread for long
+        self._thread.join(timeout=1.0)
         secs = time.time() - self.started_at
         self._report(f"saved {self.path.name} ({secs:.0f}s)")
 
