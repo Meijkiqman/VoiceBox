@@ -5,3 +5,8 @@
 # Persian/Punjabi fetched on first use); both cache locally.
 faster-whisper
 argostranslate
+# NVIDIA GPU? Strongly recommended (~1 GB extra): the CUDA 12 runtime
+# whisper needs for GPU transcription - without it transcription runs on
+# the CPU, several times slower. VoiceBox finds the wheels by itself (no
+# PATH setup) after:
+#   pip install nvidia-cublas-cu12 "nvidia-cudnn-cu12>=9,<10"

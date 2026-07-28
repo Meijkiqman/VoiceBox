@@ -2,6 +2,7 @@
 saved-phrase bank."""
 import hashlib
 import json
+import queue
 import subprocess
 import sys
 import threading
@@ -19,7 +20,7 @@ from .config import (PIPER_DIR, SAMPLERATE, TTS_CACHE_DIR, TTS_MAX_CHARS,
 # Optional neural voices: a piper/ folder (engine + voices/*.onnx) makes
 # far more realistic speech than the OS engines, fully offline. Installed
 # by setup/Get-PiperVoices.bat; absent = everything below returns empty.
-_piper_run = subprocess.run          # indirection point for the tests
+_piper_popen = subprocess.Popen      # indirection point for the tests
 
 
 def _piper_exe():
@@ -45,6 +46,96 @@ def piper_voice_map():
     return out
 
 
+class _PiperProc:
+    """One live piper process (--json-input mode): the ONNX voice model
+    loads once at spawn, then each sentence renders in a few hundred ms.
+    The old one-shot scheme reloaded the model on every call - seconds per
+    sentence, paid by every translated utterance since translations never
+    hit the wav cache. piper echoes each finished wav path on stdout;
+    that line is the completion signal."""
+
+    def __init__(self, exe, onnx, length_scale):
+        # encoding="utf-8": piper reads its JSON stdin as UTF-8; the locale
+        # codec (cp1252 on Windows) can't encode Mandarin/Persian/Punjabi
+        cmd = [str(exe), "--model", str(onnx), "--json-input", "--quiet",
+               "--length_scale", f"{length_scale:.3f}"]
+        self.proc = _piper_popen(
+            cmd, cwd=str(exe.parent), stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+            encoding="utf-8", errors="replace",
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+        self.lines = queue.Queue()
+        self.lock = threading.Lock()   # one sentence in flight at a time
+        threading.Thread(target=self._reader, daemon=True).start()
+
+    def _reader(self):
+        try:
+            for line in self.proc.stdout:
+                if line.strip():
+                    self.lines.put(line.strip())
+        except Exception:
+            pass
+        self.lines.put(None)           # EOF: the process is gone
+
+    def alive(self):
+        return self.proc.poll() is None
+
+    def synth(self, text, wav_path, timeout=120):
+        """Render one phrase (blocking); returns once the wav is written."""
+        with self.lock:
+            self.proc.stdin.write(json.dumps(
+                {"text": " ".join(str(text).split()),
+                 "output_file": str(wav_path)}, ensure_ascii=False) + "\n")
+            self.proc.stdin.flush()
+            # any synth failure kills this process (see _synth_piper), so
+            # the first echoed line always belongs to this request
+            line = self.lines.get(timeout=timeout)
+            if line is None:
+                raise RuntimeError("piper died")
+
+    def close(self):
+        try:
+            self.proc.kill()
+        except Exception:
+            pass
+
+
+_piper_lock = threading.Lock()
+_piper_procs = {}                      # {(onnx, length_scale): _PiperProc}
+
+
+def _piper_proc_for(exe, onnx, ls):
+    """The live server for a voice, spawned on first use. At most two stay
+    resident (say, the translator's voice plus the TTS voice) - each holds
+    a full voice model in RAM - evicting the least recently used."""
+    key = (str(onnx), round(ls, 3))
+    with _piper_lock:
+        p = _piper_procs.pop(key, None)
+        if p is not None and not p.alive():
+            p.close()
+            p = None
+        if p is None:
+            p = _PiperProc(exe, onnx, ls)
+        _piper_procs[key] = p          # (re)insert = most recently used
+        while len(_piper_procs) > 2:
+            _piper_procs.pop(next(iter(_piper_procs))).close()
+        return p
+
+
+def _piper_drop(onnx, ls):
+    with _piper_lock:
+        p = _piper_procs.pop((str(onnx), round(ls, 3)), None)
+    if p is not None:
+        p.close()
+
+
+def piper_shutdown():
+    """Kill any resident piper servers (app exit)."""
+    with _piper_lock:
+        while _piper_procs:
+            _piper_procs.popitem()[1].close()
+
+
 def _synth_piper(text, wav_path, voice, rate):
     """Render with the Piper engine (blocking). rate reuses the SAPI -10..10
     scale: each 10 steps doubles/halves the pace via length_scale."""
@@ -53,17 +144,19 @@ def _synth_piper(text, wav_path, voice, rate):
     if onnx is None or exe is None:
         raise RuntimeError(f"Piper voice not installed: {voice[:40]}")
     ls = 2.0 ** (-float(max(-10, min(10, rate))) / 10.0)
-    cmd = [str(exe), "--model", str(onnx), "--output_file", str(wav_path),
-           "--length_scale", f"{ls:.3f}"]
-    # encoding="utf-8": Piper reads the phrase from stdin as UTF-8. The
-    # default (text=True) uses the locale codec - cp1252 on Windows - which
-    # can't encode Mandarin/Persian/Punjabi and raises before Piper is fed.
-    r = _piper_run(cmd, input=text, encoding="utf-8", capture_output=True,
-                   timeout=120, cwd=str(exe.parent),
-                   creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
-    if r.returncode != 0 or not Path(wav_path).is_file():
-        detail = (r.stderr or r.stdout or "").strip().splitlines()
-        raise RuntimeError(detail[-1][:80] if detail else "piper failed")
+    err = None
+    for retry in (False, True):        # a dead server gets one fresh respawn
+        proc = _piper_proc_for(exe, onnx, ls)
+        try:
+            proc.synth(text, wav_path)
+            break
+        except Exception as e:
+            err = e                    # wedged or dead: never reuse it
+            _piper_drop(onnx, ls)
+            if retry:
+                raise RuntimeError(f"piper failed: {str(err)[:60]}")
+    if not Path(wav_path).is_file():
+        raise RuntimeError("piper wrote no wav")
 
 def winrt_speaking_rate(rate):
     """SAPI -10..10 speaking rate -> the WinRT SpeechSynthesizer scale
@@ -167,8 +260,10 @@ def synth_tts_wav(text, wav_path, voice=None, rate=0):
         if rate:
             cmd += ["-s", str(wpm)]
         cmd += ["--stdin"]
-    r = subprocess.run(cmd, input=text, encoding="utf-8", capture_output=True,
-                       timeout=60,
+    # errors="replace": a localized engine error printed in the console's OEM
+    # codepage must not crash the pipe reader and swallow the real message
+    r = subprocess.run(cmd, input=text, encoding="utf-8", errors="replace",
+                       capture_output=True, timeout=60,
                        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
     if r.returncode != 0:
         detail = (r.stderr or r.stdout or "").strip().splitlines()

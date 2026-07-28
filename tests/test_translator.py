@@ -324,6 +324,17 @@ except RuntimeError as e:
     check("transient fetch raises", "failed" in str(e))
 check("transient failure not blacklisted", "de" not in tr2._no_pack)
 
+# ---- warm(): runs a throwaway inference (CUDA kernel + argos pre-warm)
+# without leaking into phase or breaking later captures ----
+n_tr = len(transcribe_calls)
+tr2.warm()
+t0 = time.time()
+while len(transcribe_calls) == n_tr and time.time() - t0 < 3.0:
+    time.sleep(0.05)
+check("warm runs a throwaway inference", len(transcribe_calls) > n_tr)
+time.sleep(0.1)
+check("warm leaves phase clean", tr2.phase == "")
+
 # ---- regression: AI route + HEAR self-listen must not double-play ----
 # (the raw TTS render used to always hit the local speakers even when the
 # AI-converted translation was already mirrored there via self-listen -

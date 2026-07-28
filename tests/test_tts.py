@@ -397,43 +397,79 @@ check("piper voices discovered",
       list(vm) == ["Piper: Lessac (en_US, high)", "Piper: Ryan (en_US, high)"],
       str(list(vm)))
 
-piper_calls = []
+piper_spawns = []
+piper_texts = []
 
 
-def fake_piper_run(cmd, **kw):
-    piper_calls.append((cmd, kw))
-    import soundfile as _sf
-    _sf.write(cmd[cmd.index("--output_file") + 1],
-              np.full(2205, 0.2, np.float32), 22050, subtype="PCM_16")
-    class R:
-        returncode = 0
-        stdout = stderr = ""
-    return R()
+class FakePiperProc:
+    """Stands in for piper.exe --json-input: reads JSON request lines,
+    writes the wav, echoes the path (the persistent-server protocol)."""
+
+    def __init__(self, cmd, **kw):
+        import os
+        piper_spawns.append(cmd)
+        self.cmd = cmd
+        r, w = os.pipe()
+        self.stdout = os.fdopen(r, "r", encoding="utf-8")
+        self._echo = os.fdopen(w, "w", encoding="utf-8")
+        self.stdin = self              # capture the request writes
+        self._buf = ""
+
+    def write(self, s):
+        import soundfile as _sf
+        self._buf += s
+        while "\n" in self._buf:
+            line, self._buf = self._buf.split("\n", 1)
+            req = json.loads(line)
+            piper_texts.append(req["text"])
+            _sf.write(req["output_file"], np.full(2205, 0.2, np.float32),
+                      22050, subtype="PCM_16")
+            self._echo.write(req["output_file"] + "\n")
+            self._echo.flush()
+
+    def flush(self):
+        pass
+
+    def poll(self):
+        return None
+
+    def kill(self):
+        pass
 
 
-old_run = voicebox.tts._piper_run
-voicebox.tts._piper_run = fake_piper_run
+old_popen = voicebox.tts._piper_popen
+voicebox.tts._piper_popen = FakePiperProc
 try:
     wavp = Path(tempfile.mkdtemp()) / "piper_out.wav"
     voicebox.tts.synth_tts_wav("hello there", wavp,
                                voice="Piper: Ryan (en_US, high)", rate=10)
-    cmd, kw = piper_calls[-1]
+    cmd = piper_spawns[-1]
     check("piper synth routed to the engine",
           cmd[cmd.index("--model") + 1].endswith("en_US-ryan-high.onnx"))
-    check("piper text over stdin", kw.get("input") == "hello there")
+    check("piper text in the request", piper_texts[-1] == "hello there")
     check("piper rate maps to length_scale",
           cmd[cmd.index("--length_scale") + 1] == "0.500")
     check("piper wav written", wavp.is_file())
+    wavp2 = wavp.with_name("piper_out2.wav")
+    voicebox.tts.synth_tts_wav("second phrase", wavp2,
+                               voice="Piper: Ryan (en_US, high)", rate=10)
+    check("second synth reuses the live server",
+          len(piper_spawns) == 1 and wavp2.is_file())
     try:
         voicebox.tts._synth_piper("x", wavp, "Piper: Gone", 0)
         check("unknown piper voice fails cleanly", False)
     except RuntimeError as e:
         check("unknown piper voice fails cleanly", "not installed" in str(e))
 finally:
-    voicebox.tts._piper_run = old_run
+    voicebox.tts.piper_shutdown()
+    voicebox.tts._piper_popen = old_popen
     voicebox.tts.PIPER_DIR = old_piper_dir
+# a folder with no piper in it - NOT the real PIPER_DIR, which may well
+# have voices installed on the machine running this suite
+voicebox.tts.PIPER_DIR = Path(tempfile.mkdtemp()) / "nope"
 check("no piper folder -> no piper voices",
       voicebox.tts.piper_voice_map() == {})
+voicebox.tts.PIPER_DIR = old_piper_dir
 
 # ---------------------------------------------------------- voice + rate
 p1 = voicebox.tts_cache_path("hello")

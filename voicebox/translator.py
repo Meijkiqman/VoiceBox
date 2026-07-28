@@ -8,9 +8,12 @@ The heavy dependencies are imported lazily on the worker thread, so
 VoiceBox starts and runs without them; the row just reports what to
 install. First use also downloads the Whisper model and the Argos language
 packages (network needed once; both cache locally after that)."""
+import os
 import queue
+import sys
 import threading
 import time
+from pathlib import Path
 
 import numpy as np
 from scipy.signal import resample_poly
@@ -43,6 +46,32 @@ VOICE_HINTS = {
     "fa": ("persian", "farsi", "fa_ir"),
     "pa": ("punjabi", "panjabi", "pa_in", "pa_pk"),
 }
+
+
+_cuda_dlls_registered = False
+
+
+def _register_cuda_dlls():
+    """Windows: ctranslate2 needs the CUDA 12 runtime (cublas64_12.dll,
+    cudnn64_9.dll) for GPU inference, and the pip wheels that ship them
+    (nvidia-cublas-cu12, nvidia-cudnn-cu12) are not on the DLL search path
+    by default. Register their bin folders once, so whisper can actually
+    reach the GPU instead of silently grinding on the CPU."""
+    global _cuda_dlls_registered
+    if _cuda_dlls_registered or sys.platform != "win32":
+        return
+    _cuda_dlls_registered = True
+    import site
+    for sp in site.getsitepackages():
+        for d in Path(sp, "nvidia").glob("*/bin"):
+            try:
+                os.add_dll_directory(str(d))
+            except OSError:
+                pass
+            # ctranslate2 resolves the CUDA DLLs with a plain LoadLibrary,
+            # which searches PATH but not the add_dll_directory entries
+            os.environ["PATH"] = (str(d) + os.pathsep
+                                  + os.environ.get("PATH", ""))
 
 
 def latin_script(text):
@@ -309,7 +338,12 @@ class Translator:
         """Background model preload at startup - only when the optional deps
         are already installed - so the first hotkey tap doesn't sit behind a
         minutes-long load/download. Failures stay silent here; the first
-        real use reports them properly."""
+        real use reports them properly.
+
+        Loading is not enough: the first CUDA inference compiles kernels
+        (seconds) and Argos loads each language pair's model lazily on its
+        first translate (5+ s). Pay both here, in the background, so the
+        first spoken sentence doesn't."""
         def job():
             try:
                 import faster_whisper              # noqa: F401
@@ -318,17 +352,38 @@ class Translator:
                 return                             # feature not installed
             try:
                 self._ensure_models()
+                with self.model_lock:
+                    noise = (np.random.default_rng(0)
+                             .normal(0, 0.05, 8000).astype(np.float32))
+                    segs, _ = self._whisper.transcribe(noise, beam_size=1)
+                    list(segs)         # generator: consuming it runs the model
+                    dst = ARGOS_CODE.get(self.target(), self.target())
+                    for f, t in (("nb", "en"), ("en", dst)):
+                        if f != t:
+                            try:
+                                self._translate(".", f, t)
+                            except Exception:
+                                pass   # pack not installed yet: fetched on use
+                try:                   # spin up the target voice's piper
+                    tts_synthesize(".", self.voice_for(self.target()), 0)
+                except Exception:
+                    pass               # no voice yet: reported on first use
             except Exception:
                 pass
         threading.Thread(target=job, daemon=True).start()
 
     def _load_whisper(self, cpu=False):
+        # explicit cuda, not "auto": auto on a machine whose CUDA runtime is
+        # missing/broken quietly loads the model on the CPU in float32 - the
+        # slowest possible path. cuda raises instead, and the fallback below
+        # is CPU int8, which is several times faster than float32.
         from faster_whisper import WhisperModel
         name = self.state.trans_model or TRANS_MODEL
         if not cpu:
             try:
-                return WhisperModel(name, device="auto",
-                                    compute_type="default"), "auto"
+                _register_cuda_dlls()
+                return WhisperModel(name, device="cuda",
+                                    compute_type="float16"), "cuda"
             except Exception:
                 pass       # no CUDA runtime / half-precision unsupported
         return WhisperModel(name, device="cpu", compute_type="int8"), "cpu"
@@ -431,9 +486,11 @@ class Translator:
 
         def run():
             # faster-whisper decodes lazily: errors surface while iterating
-            # segments, so the join belongs inside the retry scope
+            # segments, so the join belongs inside the retry scope.
+            # beam_size=1 (greedy): live conversation wants latency far more
+            # than the last percent of accuracy a 5-wide beam buys.
             segments, info = self._whisper.transcribe(
-                audio16, language=language, beam_size=5, vad_filter=True)
+                audio16, language=language, beam_size=1, vad_filter=True)
             text = " ".join(s.text.strip() for s in segments).strip()
             return text, info
 
@@ -470,8 +527,10 @@ class Translator:
         self._ensure_models(announce=True)
         self.phase = "transcribing..."
         src_cfg = self.source()
+        t0 = time.time()
         text, detected = self.transcribe(
             audio, None if src_cfg == "auto" else src_cfg)
+        stt_s = time.time() - t0
         if not text:
             self._report("translator: heard nothing")
             return
@@ -480,6 +539,7 @@ class Translator:
             raise RuntimeError(f"can't translate from '{detected}'")
         dst = self.target()                        # UI code ("pa", ...)
         dst_argos = ARGOS_CODE.get(dst, dst)       # Argos code ("pb", ...)
+        t0 = time.time()
         if src == dst_argos:
             out = text                 # same language: voice-over only
         else:
@@ -491,6 +551,7 @@ class Translator:
                 out = (self._translate(text, src, dst_argos) or "").strip()
             if not out:
                 raise RuntimeError("translation came back empty")
+        mt_s = time.time() - t0
         self.phase = "speaking..."
         self.last = f"{detected}: {text}  ->  {dst}: {out}"
         voice = self.voice_for(dst)
@@ -499,8 +560,14 @@ class Translator:
             # dead silence - name the real problem instead of "speaking" it
             raise RuntimeError(f"no {dict(TRANS_TARGETS)[dst]} voice "
                                "installed - see setup/get_piper_voices.py")
+        t0 = time.time()
         samples, wav = tts_synthesize(out, voice, 0)
-        self._report(self.last[:120])
+        tts_s = time.time() - t0
+        # the timing tail says where a slow pipeline spends its time (stt on
+        # the CPU instead of the GPU is the classic one)
+        self._report(f"{self.last[:95]}  "
+                     f"[stt {stt_s:.1f}s + mt {mt_s:.1f}s + tts {tts_s:.1f}s"
+                     f" on {self._device}]")
         self._route(samples, wav)
 
     def _route(self, samples, wav):

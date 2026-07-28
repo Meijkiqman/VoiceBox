@@ -100,6 +100,12 @@ per-sentence? Tap Ctrl+Alt+T (or the Translate row) for a one-shot
 capture that sends itself the same way.
 First use downloads the Whisper model and the Argos language packs (needs
 internet once per language; everything runs locally after that).
+On an NVIDIA GPU, also
+`pip install nvidia-cublas-cu12 "nvidia-cudnn-cu12>=9,<10"` - that's the
+CUDA runtime Whisper needs to transcribe on the GPU (about a second per
+sentence) instead of the CPU (several times slower). The status line
+shows a per-stage timing tail after each translation, ending in
+`on cuda` or `on cpu`, so you can see which one you're getting.
 "Translate voice" auto-picks an installed voice for the target language.
 The Windows default voices are English-only, so non-English targets need a
 voice that speaks the language: `setup/Get-PiperVoices.bat` now includes

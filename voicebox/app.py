@@ -15,7 +15,7 @@ from .soundboard import Board
 from .state import State, load_settings, save_settings, settings_autosave
 from .trainer import Trainer
 from .translator import Translator
-from .tts import TTSBank
+from .tts import TTSBank, piper_shutdown
 from .ui import run_ui
 
 def main():
@@ -76,5 +76,6 @@ def main():
         monitor.close()
         player.close()
         engine.close()
+        piper_shutdown()               # resident piper servers die with us
     print("stopped.")
 
