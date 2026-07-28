@@ -25,7 +25,9 @@ TTS_MAX_CHARS    = 200                            # per-phrase length cap
 # (through the effects or the AI voice, like a typed phrase).
 TRANS_SOURCES  = [("auto", "auto"), ("no", "Norwegian"), ("en", "English")]
 TRANS_TARGETS  = [("en", "English"), ("es", "Spanish"), ("zh", "Mandarin"),
-                  ("fa", "Persian"), ("pa", "Punjabi")]
+                  ("fa", "Persian"), ("pa", "Punjabi"), ("de", "German"),
+                  ("fr", "French"), ("it", "Italian"), ("pt", "Portuguese"),
+                  ("tr", "Turkish"), ("ar", "Arabic")]
 TRANS_MODEL    = "small"    # faster-whisper size; override via settings.json
                             # "trans_model" ("base" = lighter, "medium" = better)
 TRANS_MAX_S    = 30.0       # capture cap per utterance, seconds

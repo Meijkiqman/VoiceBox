@@ -45,6 +45,12 @@ VOICE_HINTS = {
     "zh": ("chinese", "mandarin", "taiwanese", "zh_cn"),
     "fa": ("persian", "farsi", "fa_ir"),
     "pa": ("punjabi", "panjabi", "pa_in", "pa_pk"),
+    "de": ("german", "deutsch", "de_de"),
+    "fr": ("french", "français", "francais", "fr_fr"),
+    "it": ("italian", "italiano", "it_it"),
+    "pt": ("portuguese", "português", "portugues", "pt_br", "pt_pt"),
+    "tr": ("turkish", "türkçe", "turkce", "tr_tr"),
+    "ar": ("arabic", "ar_jo", "ar_sa"),
 }
 
 
@@ -592,9 +598,10 @@ class Translator:
         if not text:
             self._report("translator: heard nothing")
             return
-        src = ARGOS_CODE.get(detected)
-        if src is None:
-            raise RuntimeError(f"can't translate from '{detected}'")
+        # pass unmapped codes straight through: whisper and Argos agree on
+        # nearly every ISO code, so any spoken language works as a source -
+        # a missing Argos pack fails cleanly in _ensure_pair below
+        src = ARGOS_CODE.get(detected, detected)
         dst = self.target()                        # UI code ("pa", ...)
         dst_argos = ARGOS_CODE.get(dst, dst)       # Argos code ("pb", ...)
         t0 = time.time()

@@ -1,7 +1,7 @@
 """Install the Piper neural TTS engine + six realistic English voices,
 plus one voice per Translate target language (the Windows default voices
-are English-only, so without these the translator's Spanish/Mandarin/
-Persian output has nothing that can speak it).
+are English-only, so without these the translator's non-English output
+has nothing that can speak it).
 
 Downloads into <VoiceBox>/piper/:
     piper.exe (or piper on Linux/macOS) + its espeak-ng data
@@ -14,6 +14,12 @@ Downloads into <VoiceBox>/piper/:
     voices/es_ES-davefx-medium.onnx    - male, Spanish (Translate target)
     voices/zh_CN-huayan-medium.onnx    - female, Mandarin (Translate target)
     voices/fa_IR-amir-medium.onnx      - male, Persian (Translate target)
+    voices/de_DE-thorsten-medium.onnx  - male, German (Translate target)
+    voices/fr_FR-siwis-medium.onnx     - female, French (Translate target)
+    voices/it_IT-paola-medium.onnx     - female, Italian (Translate target)
+    voices/pt_BR-faber-medium.onnx     - male, Portuguese (Translate target)
+    voices/tr_TR-fahrettin-medium.onnx - male, Turkish (Translate target)
+    voices/ar_JO-kareem-medium.onnx    - male, Arabic (Translate target)
 (Punjabi has no Piper or Windows voice; that target stays text-only.)
 
 Idempotent: anything already present is skipped. Run from anywhere:
@@ -66,6 +72,18 @@ VOICE_PATHS = [
     "zh/zh_CN/huayan/medium/zh_CN-huayan-medium.onnx.json",
     "fa/fa_IR/amir/medium/fa_IR-amir-medium.onnx",      # male, Persian
     "fa/fa_IR/amir/medium/fa_IR-amir-medium.onnx.json",
+    "de/de_DE/thorsten/medium/de_DE-thorsten-medium.onnx",   # male, German
+    "de/de_DE/thorsten/medium/de_DE-thorsten-medium.onnx.json",
+    "fr/fr_FR/siwis/medium/fr_FR-siwis-medium.onnx",    # female, French
+    "fr/fr_FR/siwis/medium/fr_FR-siwis-medium.onnx.json",
+    "it/it_IT/paola/medium/it_IT-paola-medium.onnx",    # female, Italian
+    "it/it_IT/paola/medium/it_IT-paola-medium.onnx.json",
+    "pt/pt_BR/faber/medium/pt_BR-faber-medium.onnx",    # male, Portuguese (BR)
+    "pt/pt_BR/faber/medium/pt_BR-faber-medium.onnx.json",
+    "tr/tr_TR/fahrettin/medium/tr_TR-fahrettin-medium.onnx",  # male, Turkish
+    "tr/tr_TR/fahrettin/medium/tr_TR-fahrettin-medium.onnx.json",
+    "ar/ar_JO/kareem/medium/ar_JO-kareem-medium.onnx",  # male, Arabic
+    "ar/ar_JO/kareem/medium/ar_JO-kareem-medium.onnx.json",
 ]
 VOICE_FILES = [(f"{HF}/v1.0.0/{p}", f"{HF}/main/{p}") for p in VOICE_PATHS]
 
@@ -154,7 +172,13 @@ def main():
     print("  Piper: Davefx (es_ES, medium)      male, Spanish")
     print("  Piper: Huayan (zh_CN, medium)      female, Mandarin")
     print("  Piper: Amir (fa_IR, medium)        male, Persian")
-    print("(the translator auto-picks the last three for their languages)")
+    print("  Piper: Thorsten (de_DE, medium)    male, German")
+    print("  Piper: Siwis (fr_FR, medium)       female, French")
+    print("  Piper: Paola (it_IT, medium)       female, Italian")
+    print("  Piper: Faber (pt_BR, medium)       male, Portuguese")
+    print("  Piper: Fahrettin (tr_TR, medium)   male, Turkish")
+    print("  Piper: Kareem (ar_JO, medium)      male, Arabic")
+    print("(the translator auto-picks the non-English ones by language)")
 
 
 if __name__ == "__main__":

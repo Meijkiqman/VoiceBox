@@ -24,6 +24,7 @@ class _Info:
 
 
 transcribe_calls = []
+next_lang = []                 # when set, the next transcribe reports this
 
 
 class _FakeWhisper:
@@ -32,6 +33,8 @@ class _FakeWhisper:
 
     def transcribe(self, audio, language=None, **k):
         transcribe_calls.append((len(audio), language))
+        if next_lang:
+            return [_Seg(" hallo welt ")], _Info(next_lang.pop())
         if language == "en":
             return [_Seg(" hello there ")], _Info("en")
         return [_Seg(" hei "), _Seg("på deg ")], _Info("no")
@@ -42,7 +45,7 @@ fw.WhisperModel = _FakeWhisper
 sys.modules["faster_whisper"] = fw
 
 DIRECT = {("nb", "en"), ("en", "es"), ("en", "zh"), ("en", "nb"),
-          ("en", "fa"), ("en", "pb")}
+          ("en", "fa"), ("en", "pb"), ("de", "en")}
 
 
 def _fake_translate(text, f, t):
@@ -195,6 +198,27 @@ with state.lock:
     state.trans_voice_pa = None
     state.trans_target = None
 
+# ---- unmapped source language passes straight through (German) ----
+with state.lock:
+    state.trans_source, state.trans_target = None, "en"    # auto source
+next_lang.append("de")
+speak_into(tr, state)
+ev = wait_event(state)
+check("german source translates via passthrough",
+      ev is not None and "[de->en]" in tr.last, tr.last)
+wait_idle(tr)
+
+# ---- new target languages: hints auto-pick their Piper voices ----
+NEW_VOICES = ["Piper: Thorsten (de_DE, medium)", "Piper: Siwis (fr_FR, medium)",
+              "Piper: Paola (it_IT, medium)", "Piper: Faber (pt_BR, medium)",
+              "Piper: Fahrettin (tr_TR, medium)",
+              "Piper: Kareem (ar_JO, medium)"]
+for code, who in [("de", "Thorsten"), ("fr", "Siwis"), ("it", "Paola"),
+                  ("pt", "Faber"), ("tr", "Fahrettin"), ("ar", "Kareem")]:
+    check(f"hint match {code}",
+          (pick_voice(NEW_VOICES, code) or "").split()[1] == who,
+          str(pick_voice(NEW_VOICES, code)))
+
 # ---- latin_script: what the default English voice can/can't render ----
 check("latin stays speakable", latin_script("hola, ¿qué tal? på deg"))
 check("gurmukhi is not", not latin_script("ਸਤ ਸ੍ਰੀ ਅਕਾਲ"))
@@ -318,11 +342,11 @@ check("auto off persisted", state.trans_auto is False)
 # (this file's apkg stub raises from update_package_index = network down;
 # that must NOT blacklist the language like a definitive index miss does)
 try:
-    tr2._ensure_pair("de", "en")
+    tr2._ensure_pair("sv", "en")       # a pair the stub does NOT have
     check("transient fetch raises", False)
 except RuntimeError as e:
     check("transient fetch raises", "failed" in str(e))
-check("transient failure not blacklisted", "de" not in tr2._no_pack)
+check("transient failure not blacklisted", "sv" not in tr2._no_pack)
 
 # ---- warm(): runs a throwaway inference (CUDA kernel + argos pre-warm)
 # without leaking into phase or breaking later captures ----

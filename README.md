@@ -46,7 +46,8 @@ Or by hand: `pip install -r requirements.txt`, then `python voicebox.py`.
   dropped into `piper/voices/` joins the pickers too.
 - **Speech translator** - flip **Auto translate** (top of the
   Translator card) and just talk: each sentence you say is transcribed, translated (English,
-  Spanish, Mandarin, Persian or Punjabi) and spoken into the mic in a native TTS voice - or
+  Spanish, Mandarin, German, French, Italian, Portuguese, Turkish, Arabic,
+  Persian or Punjabi) and spoken into the mic in a native TTS voice - or
   in *your* RVC voice while the AI voice is live - while your raw voice
   stays off the cable. Ctrl+Alt+T does a one-shot capture instead.
   Offline after first-run downloads;
@@ -83,8 +84,10 @@ David is the standard male English one). For *realistic* speech, run
 engine plus six English voices - **Ryan** and **Lessac** (US, very
 natural), **Hfc Male** and **Hfc Female** (US, clean), **Alan** and
 **Cori** (British) - and one voice per Translate target (**Davefx**,
-Spanish; **Huayan**, Mandarin; **Amir**, Persian), all appearing as
-"Piper: ..." at the top of every picker (~760 MB total). Other
+Spanish; **Huayan**, Mandarin; **Amir**, Persian; **Thorsten**, German;
+**Siwis**, French; **Paola**, Italian; **Faber**, Portuguese;
+**Fahrettin**, Turkish; **Kareem**, Arabic), all appearing as
+"Piper: ..." at the top of every picker (~1.2 GB total). Other
 languages/voices: grab the `.onnx` + `.onnx.json` pair from
 [the Piper voice collection](https://huggingface.co/rhasspy/piper-voices)
 into `piper/voices/`.
