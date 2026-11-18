@@ -10,6 +10,7 @@ from .controls import GlobalHotkeys
 from .cues import Cues
 from .harvester import Harvester
 from .listener import Listener
+from .log import get_logger, setup as log_setup
 from .scenes import Scenes
 from .soundboard import Board
 from .state import State, load_settings, save_settings, settings_autosave
@@ -25,6 +26,9 @@ def main():
     if args.list:
         print(sd.query_devices()); return
 
+    log_setup()                   # voicebox.log: what the status line can't hold
+    log = get_logger("app")
+    log.info("starting")
     state = State()
     state.restore(load_settings())
     stop_flag = threading.Event()
@@ -80,5 +84,6 @@ def main():
         player.close()
         engine.close()
         piper_shutdown()               # resident piper servers die with us
+        log.info("stopped")
     print("stopped.")
 

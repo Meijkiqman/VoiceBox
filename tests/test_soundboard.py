@@ -191,6 +191,23 @@ check("quiet clips boosted at most 4x",
       abs(float(np.abs(by_name["quiet"]).max()) - 0.2) < 0.02,
       f"peak={float(np.abs(by_name['quiet']).max()):.3f}")
 
+# the decoded clips are cached on disk under sounds/.decoded so a launch
+# doesn't re-decode the folder: a second load comes back identical from the
+# cache, and a cache entry whose source file vanished is pruned
+from voicebox.config import CLIP_CACHE_DIRNAME
+cache_dir = norm_dir / CLIP_CACHE_DIRNAME
+check("decoded clips cached on disk", len(list(cache_dir.glob("*.npy"))) == 2)
+voicebox.soundboard._clip_cache.clear()          # force the disk path
+voicebox.soundboard.SOUNDS_DIR = norm_dir
+c2, n2 = voicebox.load_clips()
+(norm_dir / "quiet.wav").unlink()
+c3, n3 = voicebox.load_clips()
+voicebox.soundboard.SOUNDS_DIR = old_dir
+check("disk cache serves identical audio",
+      n2 == n_names and all(np.array_equal(a, b) for a, b in zip(c2, n_clips)))
+check("stale cache entries pruned",
+      n3 == ["loud"] and len(list(cache_dir.glob("*.npy"))) == 1)
+
 # ------------------------------------------------------------- grid UI smoke
 import pygame
 

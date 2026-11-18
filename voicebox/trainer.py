@@ -16,6 +16,9 @@ from pathlib import Path
 import numpy as np
 
 from .config import BASE_DIR, RVC_DIR, TRAIN_LOG_DIR, TRAINING_DIR
+from .log import get_logger
+
+_log = get_logger("trainer")
 
 TRAIN_NAME = "MyVoice"        # the experiment/model name the retrain row trains
 MIN_MINUTES = 5.0             # don't bother below this much harvested data
@@ -104,8 +107,7 @@ class Trainer:
         """Status line + log: every message the rows show is also written
         to this attempt's log, so a refusal that flashed past is still
         readable afterwards."""
-        self.state.status_msg = msg
-        self.state.status_at = time.time()
+        self.state.report(msg)
         self._log(msg)
 
     def _log(self, msg):
@@ -341,6 +343,7 @@ class Trainer:
                 try:
                     self.ai.rescan()
                 except Exception:
-                    pass
+                    _log.warning("AI voice rescan after training failed",
+                                exc_info=True)
             self._report(f"training done - '{name}' is in the AI character "
                          "row")

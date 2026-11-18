@@ -22,7 +22,11 @@ from .config import (BLOCKSIZE, SAMPLERATE, TRANS_AUTO_STOP_S,
                      TRANS_FLOOR_DB, TRANS_FLOOR_MAX, TRANS_IDLE_S,
                      TRANS_MAX_S, TRANS_MIN_S, TRANS_MODEL, TRANS_SOURCES,
                      TRANS_TARGETS, TRANS_VAD_KEEP, TRANS_VAD_START)
-from .tts import tts_synthesize
+from .log import get_logger
+from .tts import route_speech, tts_synthesize
+from .util import cycle_index, ellipsize
+
+_log = get_logger("translator")
 
 # Whisper reports ISO codes; Argos wants "nb" for Norwegian (Bokmål - "nn"
 # Nynorsk speech is close enough that routing it through nb beats failing)
@@ -73,7 +77,7 @@ def _register_cuda_dlls():
             try:
                 os.add_dll_directory(str(d))
             except OSError:
-                pass
+                _log.debug("add_dll_directory(%s) failed", d, exc_info=True)
             # ctranslate2 resolves the CUDA DLLs with a plain LoadLibrary,
             # which searches PATH but not the add_dll_directory entries
             os.environ["PATH"] = (str(d) + os.pathsep
@@ -157,15 +161,13 @@ class Translator:
 
     def cycle_source(self, d=1):
         codes = [c for c, _ in TRANS_SOURCES]
-        i = codes.index(self.source())
         with self.state.lock:
-            self.state.trans_source = codes[(i + (1 if d >= 0 else -1)) % len(codes)]
+            self.state.trans_source = cycle_index(codes, self.source(), d)
 
     def cycle_target(self, d=1):
         codes = [c for c, _ in TRANS_TARGETS]
-        i = codes.index(self.target())
         with self.state.lock:
-            self.state.trans_target = codes[(i + (1 if d >= 0 else -1)) % len(codes)]
+            self.state.trans_target = cycle_index(codes, self.target(), d)
 
     def source_label(self):
         return dict(TRANS_SOURCES)[self.source()]
@@ -183,19 +185,16 @@ class Translator:
         list (None = auto-pick by language name)."""
         opts = [None] + (self.voice_names or [])
         attr = "trans_voice_" + self.target()
-        try:
-            i = opts.index(getattr(self.state, attr, None))
-        except ValueError:
-            i = 0
         with self.state.lock:
-            setattr(self.state, attr, opts[(i + (1 if d >= 0 else -1)) % len(opts)])
+            setattr(self.state, attr,
+                    cycle_index(opts, getattr(self.state, attr, None), d))
 
     def voice_label(self):
         explicit = getattr(self.state, "trans_voice_" + self.target(), None)
         if explicit is None:
             auto = self.voice_for()
             return f"auto ({auto[:14]}...)" if auto else "auto (default)"
-        return explicit if len(explicit) <= 24 else explicit[:21] + "..."
+        return ellipsize(explicit, 24)
 
     def row_label(self):
         """The Translate row's value text."""
@@ -236,8 +235,7 @@ class Translator:
                      else "auto-translate off")
 
     def _report(self, msg):
-        self.state.status_msg = msg
-        self.state.status_at = time.time()
+        self.state.report(msg)
 
     def _start_capture(self):
         if self.phase and not self.auto:   # still working on the last one
@@ -281,7 +279,11 @@ class Translator:
                 if not self.capturing or self.state.trans_tap is not tap:
                     return             # manual stop, or not our capture anymore
                 now = time.time()
-                lvl = 20.0 * np.log10(max(float(self.state.in_level), 1e-4))
+                # the callback keeps a running peak between our 50 ms ticks,
+                # so a short word can't fall between two sampled blocks
+                lin = max(float(self.state.in_level), float(self.state.in_peak))
+                self.state.in_peak = 0.0
+                lvl = 20.0 * np.log10(max(lin, 1e-4))
                 floor = min(TRANS_FLOOR_MAX,
                             lvl if lvl < floor else floor + 0.15)
                 if lvl >= floor + (TRANS_VAD_KEEP if heard and
@@ -353,6 +355,7 @@ class Translator:
                 self._process(audio)
                 self.error = ""
             except Exception as e:
+                _log.warning("translation failed", exc_info=True)
                 self.error = str(e)[:80]
                 self._report(f"translator: {self.error}")
             finally:
@@ -391,9 +394,9 @@ class Translator:
                 try:                   # spin up the target voice's piper
                     tts_synthesize(".", self.voice_for(self.target()), 0)
                 except Exception:
-                    pass               # no voice yet: reported on first use
-            except Exception:
-                pass
+                    _log.debug("warm: no target voice yet", exc_info=True)
+            except Exception:          # reported properly on first real use
+                _log.warning("translator warm-up failed", exc_info=True)
         threading.Thread(target=job, daemon=True).start()
 
     def _load_whisper(self, cpu=False, gpu_only=False):
@@ -641,16 +644,5 @@ class Translator:
         it is live (the translation comes out in the user's RVC voice), else
         onto the mic channel - fx-tagged so the chain shapes it - plus the
         local speakers so the user hears what was said."""
-        fx = self.state.tts_fx
-        through_ai = False
-        if (fx and wav is not None and self.ai is not None
-                and self.ai.proc is not None):
-            through_ai = self.ai.inject(wav)
-        if not through_ai:
-            self.state.events.put(("trans", samples, fx))
-        # skipped when self-listen already carries the phrase - including the
-        # AI path (worker mirror, or the chain mirror with AI voice FX on):
-        # the raw render on top would overlap it in two voices at once
-        mirrored = self.monitor is not None and self.monitor.on
-        if self.player is not None and not mirrored:
-            self.player.play_raw(samples)
+        route_speech(self.state, self.player, self.monitor, self.ai,
+                     samples, wav, "trans")

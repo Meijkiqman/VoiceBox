@@ -2,13 +2,16 @@
 import socket
 import subprocess
 import threading
-import time
 from pathlib import Path
 
 import numpy as np
 
 from .config import (BASE_DIR, INPUT_DEVICE_MATCH, OUTPUT_DEVICE_MATCH,
                      RVC_DIR, SAMPLERATE)
+from .log import get_logger
+
+_log = get_logger("aivoice")
+
 
 class _Lerp:
     """Stateful linear-interpolation resampler: phase and the last sample
@@ -119,7 +122,7 @@ class AiFeed:
                         self.buf = self.buf[-self.need:]
                         self.primed = False
         except Exception:
-            pass
+            _log.debug("fx bridge connection ended", exc_info=True)
 
     def read(self, n):
         """n engine-rate samples for the audio callback (zero-padded on
@@ -174,6 +177,7 @@ class AiVoice:
             try:
                 self.feed = AiFeed(state)
             except Exception:
+                _log.warning("AI voice FX bridge unavailable", exc_info=True)
                 self.feed = None
         state.ai_feed = self.feed          # read by the audio callback
         self.sel = 0
@@ -352,9 +356,9 @@ class AiVoice:
                 stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                 creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
         except Exception as e:
+            _log.warning("worker launch failed: %s", e)
             self.status = "error"
-            self.state.status_msg = f"AI: {e}"
-            self.state.status_at = time.time()
+            self.state.report(f"AI: {e}")
             return
         self.status = "loading..."
         # NOTE: ai_mute is NOT set here. The worker needs 10-30 s (torch
@@ -379,11 +383,12 @@ class AiVoice:
                         self.state.cues.ai_ready()
                 elif line.startswith("STATUS error"):
                     self.status = "error"
-                    self.state.status_msg = f"AI: {line[13:][:70]}"
-                    self.state.status_at = time.time()
+                    _log.warning("worker: %s", line)
+                    self.state.report(f"AI: {line[13:][:70]}")
         except Exception:
-            pass
+            _log.debug("worker stdout reader ended", exc_info=True)
         if proc is self.proc:              # worker died on its own
+            _log.info("AI worker exited on its own")
             self.proc = None
             if self.status != "error":
                 self.status = "off"

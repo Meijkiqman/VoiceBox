@@ -11,17 +11,38 @@ import soundfile as sf
 
 from .config import (BLOCKSIZE, CHANNELS, INPUT_DEVICE_MATCH,
                      OUTPUT_DEVICE_MATCH, RECORDINGS_DIR, SAMPLERATE)
+from .log import get_logger
+from .util import cycle_index, ellipsize
+
+_log = get_logger("audio")
+
 
 def make_callback(state):
     carry = np.zeros(0, dtype=np.float32)   # over-produced samples roll forward
+    voice_idle = False                      # voice path silent last block
 
     def callback(indata, outdata, frames, time_info, status):
-        nonlocal carry
+        # sounddevice aborts the whole stream when the callback raises -
+        # the cable would go silent until the next device re-open. Keep the
+        # stream alive: this block is silence, the footer says what broke.
+        try:
+            _callback(indata, outdata, frames, time_info, status)
+        except Exception as e:
+            outdata[:] = 0
+            state.status_msg = f"audio: {str(e)[:70]}"
+            state.status_at = time.time()
+            state.status_count += 1
+
+    def _callback(indata, outdata, frames, time_info, status):
+        nonlocal carry, voice_idle
         if status:
             state.status_msg = str(status)   # no print in the audio callback
             state.status_at = time.time()
             state.status_count += 1
-        state.in_level = float(np.abs(indata[:, 0]).max())   # feeds the UI mic meter
+        lvl = float(np.abs(indata[:, 0]).max())
+        state.in_level = lvl                  # feeds the UI mic meter
+        if lvl > state.in_peak:               # running max between reads - the
+            state.in_peak = lvl               # translator's VAD consumes+resets it
 
         # raw-mic mirrors (translator capture, voice harvester): the consumers
         # need the untouched voice - before gain, gate and effects - so they
@@ -58,8 +79,11 @@ def make_callback(state):
             gate_on, gate_db = state.gate_on, state.gate_db
 
         # apply queued UI events (audio thread owns the shifter and voice list)
-        while not state.events.empty():
-            ev = state.events.get_nowait()
+        while True:
+            try:
+                ev = state.events.get_nowait()
+            except queue.Empty:
+                break
             if ev == "stop":
                 state.voices.clear()
                 state.tts_voices.clear()
@@ -119,7 +143,14 @@ def make_callback(state):
         if x is None:
             y = np.zeros(frames, dtype=np.float32)
             carry = np.zeros(0, dtype=np.float32)
+            if not voice_idle:
+                # the shifter still holds the last ~20 ms it was fed; left
+                # there, it would be replayed as a blip when the voice path
+                # comes back (AI worker stopped) minutes later
+                state.shifter.reset()
+                voice_idle = True
         else:
+            voice_idle = False
             if tts_pre is not None:
                 x = x + tts_pre           # entry gains already applied above
             y = state.shifter.process(x)
@@ -217,8 +248,7 @@ class AudioEngine:
         self.latency_ms = None         # reported stream latency, for the footer
 
     def _report(self, msg):
-        self.state.status_msg = msg
-        self.state.status_at = time.time()
+        self.state.report(msg)
 
     def _resolve(self, kind):
         saved = (self.state.input_device if kind == "input"
@@ -293,6 +323,7 @@ class AudioEngine:
                 m.toggle()             # HEAR stays on, now mirroring the stream
             return True
         except (SystemExit, Exception) as e:
+            _log.warning("main stream open failed: %s", e)
             self.stream = None
             self.dev_line = ""
             self.latency_ms = None
@@ -325,7 +356,7 @@ class AudioEngine:
                  else self.state.output_device)
         if saved is None:
             name = "default" if kind == "input" else f"auto ({name[:14]})"
-        return name if len(name) <= width else name[:width - 3] + "..."
+        return ellipsize(name, width)
 
     def cycle(self, kind, d):
         """Step through available devices (wrapping through "default") and
@@ -335,11 +366,7 @@ class AudioEngine:
             return
         saved = (self.state.input_device if kind == "input"
                  else self.state.output_device)
-        try:
-            i = opts.index(saved)
-        except ValueError:                 # saved device vanished mid-session
-            i = 0
-        choice = opts[(i + (1 if d >= 0 else -1)) % len(opts)]
+        choice = cycle_index(opts, saved, d)   # a vanished device restarts at default
         with self.state.lock:
             setattr(self.state, kind + "_device", choice)
         if not self.open():
@@ -430,6 +457,7 @@ class Monitor:
                 self.fallback = True
             self.error = ""
         except Exception as e:
+            _log.warning("self-listen stream failed: %s", e)
             self.stream = None
             self.state.monitor_q = None
             self.fallback = False
@@ -483,6 +511,7 @@ class LocalPlayer:
             self.error = ""
             return True
         except Exception as e:
+            _log.warning("speaker stream failed: %s", e)
             if stream is not None:
                 try:
                     stream.close()
@@ -554,8 +583,7 @@ class Recorder:
         return self.state.record_q is not None
 
     def _report(self, msg):
-        self.state.status_msg = msg
-        self.state.status_at = time.time()
+        self.state.report(msg)
 
     def start(self):
         if self.on:
@@ -567,6 +595,7 @@ class Recorder:
                              samplerate=SAMPLERATE, channels=1,
                              subtype="PCM_16")
         except Exception as e:
+            _log.warning("recording could not start: %s", e)
             self.error = str(e)
             self._report(f"record: {e}")
             return
@@ -575,14 +604,17 @@ class Recorder:
         self.started_at = time.time()
         q = queue.Queue(maxsize=64)    # ~0.7 s of headroom for slow disks
         self._stop = threading.Event()
-        self._thread = threading.Thread(target=self._writer, args=(f, q),
-                                        daemon=True)
+        # stop event passed as an arg: after a slow-disk stop() timed out, a
+        # quick start() replaces self._stop - the old writer must still see
+        # ITS event, or it spins forever and never closes its file
+        self._thread = threading.Thread(target=self._writer,
+                                        args=(f, q, self._stop), daemon=True)
         self._thread.start()
         self.state.record_q = q
 
-    def _writer(self, f, q):
+    def _writer(self, f, q, stop):
         try:
-            while not self._stop.is_set() or not q.empty():
+            while not stop.is_set() or not q.empty():
                 try:
                     f.write(q.get(timeout=0.2))
                 except queue.Empty:

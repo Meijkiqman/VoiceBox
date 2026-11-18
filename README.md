@@ -142,3 +142,10 @@ Desktop shortcut.
 ## Tests
 
 `python tests/run_all.py` - headless, no audio hardware or window needed.
+
+## Troubleshooting
+
+`voicebox.log` next to `voicebox.py` (rotating, ~1 MB) records what the
+status line can't hold: failed device opens, synthesis errors, the AI
+worker's STATUS lines, translator warm-up failures. Read it first when
+something silently does nothing.

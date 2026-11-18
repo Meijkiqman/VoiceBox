@@ -10,8 +10,13 @@ import numpy as np
 from .config import (BASE_DIR, SAMPLERATE, SOUNDS_DIR, TRANS_TARGETS,
                      TTS_MAX_CHARS, WINDOW_SIZE)
 from .controls import build_keymap, load_controls
+from .log import get_logger
 from .soundboard import Board
 from .tts import TTSBank
+from .util import cycle_index, ellipsize
+
+_log = get_logger("ui")
+
 
 def get_clipboard_text():
     """OS clipboard -> str ('' when empty or unavailable). Tk ships with
@@ -26,6 +31,7 @@ def get_clipboard_text():
         finally:
             root.destroy()
     except Exception:
+        _log.debug("clipboard read failed", exc_info=True)
         return ""
     return " ".join(str(text).split())
 
@@ -331,15 +337,13 @@ class Menu:
 
     def _save_preset(self):
         name = self.state.save_user_preset()
-        self.state.status_msg = \
-            f"saved \"{name}\" - right-click it in the Preset list to rename"
-        self.state.status_at = time.time()
+        self.state.report(
+            f"saved \"{name}\" - right-click it in the Preset list to rename")
 
     def _save_scene(self):
         name = self.scenes.save()
-        self.state.status_msg = \
-            f"saved \"{name}\" - right-click it in the Scene list to rename"
-        self.state.status_at = time.time()
+        self.state.report(
+            f"saved \"{name}\" - right-click it in the Scene list to rename")
 
     def _toggle_gate(self):
         with self.state.lock:
@@ -400,18 +404,12 @@ class Menu:
 
     def _tts_voice_label(self):
         v = self.state.tts_voice
-        if v is None:
-            return "default"
-        return v if len(v) <= 24 else v[:21] + "..."
+        return "default" if v is None else ellipsize(v, 24)
 
     def _cycle_tts_voice(self, d=1):
         opts = [None] + (self.tts.voice_names or [])
-        try:
-            i = opts.index(self.state.tts_voice)
-        except ValueError:             # saved voice no longer installed
-            i = 0
-        with self.state.lock:
-            self.state.tts_voice = opts[(i + (1 if d >= 0 else -1)) % len(opts)]
+        with self.state.lock:          # an uninstalled saved voice restarts at "default"
+            self.state.tts_voice = cycle_index(opts, self.state.tts_voice, d)
         self.tts.invalidate()
 
     def _adjust_tts_rate(self, d):
@@ -481,6 +479,11 @@ def run_ui(state, stop_flag, dev_line, err_line="", monitor=None, board=None,
     import pygame
     pygame.init()
     pygame.display.set_caption("VoiceBox")
+    try:                          # taskbar/title-bar icon (before set_mode)
+        pygame.display.set_icon(pygame.image.load(
+            str(BASE_DIR / "assets" / "voicebox.png")))
+    except Exception:
+        pass
     # headless screenshot hook (tests/dev): VOICEBOX_SHOT=path[@WxH][:frames]
     shot_path, shot_frames, shot_size = "", 0, WINDOW_SIZE
     shot = os.environ.get("VOICEBOX_SHOT", "")
@@ -497,11 +500,12 @@ def run_ui(state, stop_flag, dev_line, err_line="", monitor=None, board=None,
         shot_path = shot
     screen = pygame.display.set_mode(shot_size if shot_path else WINDOW_SIZE,
                                      pygame.RESIZABLE)
-    try:                          # OS-level minimum = the design's base size
-        from pygame._sdl2.video import Window as _SDLWindow
-        _SDLWindow.from_display_module().minimum_size = WINDOW_SIZE
-    except Exception:
-        pass
+    # The design's base size is the minimum: the VIDEORESIZE handler snaps
+    # a smaller drag back up. (Do NOT reach for pygame._sdl2's
+    # Window.from_display_module() here: it registers the temporary wrapper
+    # in SDL's window data without keeping it alive, and every later event
+    # carrying a .window attribute then dereferences freed memory - that
+    # was the "intermittent" access violation inside pygame.event.get().)
     clock = pygame.time.Clock()
     pygame.key.set_repeat(320, 110)           # held arrows auto-repeat
     frame_no = 0
@@ -569,10 +573,11 @@ def run_ui(state, stop_flag, dev_line, err_line="", monitor=None, board=None,
             if p.is_file():
                 return pygame.font.Font(str(p), size)
         except Exception:
-            pass
+            _log.warning("bundled font %s failed to load", fname, exc_info=True)
         try:
             return pygame.font.SysFont(fallback, size, bold=bold)
         except Exception:
+            _log.warning("system font %s unavailable", fallback, exc_info=True)
             return pygame.font.Font(None, size + 6)
 
     f_word = _font("SpaceGrotesk-Bold.ttf", 17, "bahnschrift,segoeui", True)
@@ -775,6 +780,15 @@ def run_ui(state, stop_flag, dev_line, err_line="", monitor=None, board=None,
     # rest join row_hit/focus like any row and must survive the frame clear
     SYS_SOLO = [e for e in SYSTEM_BAR if e[0] not in card_of_row]
     KEEP_ROWS = {SCENE_IDX, SAVE_SCENE_IDX} | {e[0] for e in SYS_SOLO}
+    # rows drawn outside the scrolling cards pane (bars + soundboard column)
+    PINNED_ROWS = KEEP_ROWS | {CLIP_VOL_IDX}
+
+    def vis(i, rect):
+        """A card row's hit rect, cut down to what is actually on screen.
+        Cards scroll underneath the header/scene strip and off the bottom;
+        an unclipped rect there kept catching clicks and hover - a click on
+        SAVE SCENE could drag a slider (or fold a card) hidden behind it."""
+        return rect if i in PINNED_ROWS else rect.clip(cards_area)
 
     def card_h(c):
         if c["key"] in collapsed:
@@ -1087,7 +1101,7 @@ def run_ui(state, stop_flag, dev_line, err_line="", monitor=None, board=None,
             if txt and (now * 2.0) % 2 < 1:
                 pygame.draw.line(screen, CLR["accent"],
                                  (box.right - 5, cy - 7), (box.right - 5, cy + 7))
-            value_hit[i] = box
+            value_hit[i] = vis(i, box)
             val_left = box.x
         else:
             n_hot = nudge["i"] == i and (now - nudge["at"]) < 0.18
@@ -1104,7 +1118,7 @@ def run_ui(state, stop_flag, dev_line, err_line="", monitor=None, board=None,
                 pygame.draw.rect(screen, mixc(CLR["paneLeft"], CLR["accent"], 0.35),
                                  vr.inflate(12, 8), width=1, border_radius=5)
             screen.blit(ts, vr.topleft)
-            value_hit[i] = vr.inflate(12, 10)
+            value_hit[i] = vis(i, vr.inflate(12, 10))
             val_left = vr.x - 6
         # slider track + knob; the 296px card leaves less room than the old
         # 370px pane, so the track starts after the label and squeezes
@@ -1131,7 +1145,7 @@ def run_ui(state, stop_flag, dev_line, err_line="", monitor=None, board=None,
                                 CLR["accentBright"], kh),
                            (kx, cy), 5)
         slider_track[i] = track
-        slider_hit[i] = track.inflate(12, 16)
+        slider_hit[i] = vis(i, track.inflate(12, 16))
 
     def draw_value(r, i, it, val, focused, now):
         nonlocal arrow_hit
@@ -1205,8 +1219,8 @@ def run_ui(state, stop_flag, dev_line, err_line="", monitor=None, board=None,
         in_rect = pygame.Rect(bx0, y, bx1 - bx0 - 52, TTS_IN_H)
         add_rect = pygame.Rect(in_rect.right + 6, y,
                                bx1 - in_rect.right - 6, TTS_IN_H)
-        tts_btn_hit["input"] = in_rect
-        tts_btn_hit["add"] = add_rect
+        tts_btn_hit["input"] = in_rect.clip(cards_area)
+        tts_btn_hit["add"] = add_rect.clip(cards_area)
         hm = q8(hover_step(("tts", "input"), in_rect.collidepoint(mouse_pos), dt))
         screen.blit(grad(in_rect.w, in_rect.h, CLR["headerBot"],
                          CLR["paneLeft"], 7), in_rect.topleft)
@@ -1255,7 +1269,12 @@ def run_ui(state, stop_flag, dev_line, err_line="", monitor=None, board=None,
         tts_target = max(0.0, min(tts_target,
                                   max(0.0, tts_content_h - TTS_LIST_H)))
         tts_scroll = step(tts_scroll, tts_target, dt, 0.14)
-        screen.set_clip(tts_list_rect.clip(cards_area))
+        # the visible part of the list: phrase rows straddling its edge must
+        # not take clicks out there (the 4th row's hidden half sat on top of
+        # the TTS voice row - its x could delete a phrase from under it)
+        list_vis = tts_list_rect.clip(cards_area)
+        tts_list_rect = list_vis
+        screen.set_clip(list_vis)
         tts_playing = {}
         # .get, never check-then-index: a scene hotkey can invalidate() the
         # bank (clearing samples) between the two from its own thread
@@ -1308,7 +1327,7 @@ def run_ui(state, stop_flag, dev_line, err_line="", monitor=None, board=None,
             xs = T(f_badge, "x", CLR["danger"] if dh > 0.4 else CLR["muted"])
             screen.blit(xs, (dr.centerx - xs.get_width() // 2,
                              dr.centery - xs.get_height() // 2))
-            tts_del_hit[i] = dr
+            tts_del_hit[i] = dr.clip(list_vis)
             st_ = tts.status.get(text, "")
             smp = tts.samples.get(text)    # .get: invalidate() may clear mid-frame
             if st_ == "ready" and smp is not None:
@@ -1346,9 +1365,9 @@ def run_ui(state, stop_flag, dev_line, err_line="", monitor=None, board=None,
                 pygame.draw.rect(screen, CLR["accent"],
                                  pygame.Rect(rr.x, rr.bottom - 2,
                                              max(2, int(rr.w * min(1.0, prog))), 2))
-            tts_row_hit[i] = rr
+            tts_row_hit[i] = rr.clip(list_vis)
         if tts_content_h > TTS_LIST_H:
-            track = pygame.Rect(bx1 - 3, tts_list_rect.y + 2, 3, TTS_LIST_H - 4)
+            track = pygame.Rect(bx1 - 3, list_top + 2, 3, TTS_LIST_H - 4)
             pygame.draw.rect(screen, CLR["scrollTrack"], track, border_radius=2)
             th = max(14, int(track.h * TTS_LIST_H / tts_content_h))
             tt_y = track.y + int((track.h - th)
@@ -1588,7 +1607,6 @@ def run_ui(state, stop_flag, dev_line, err_line="", monitor=None, board=None,
         drop_refresh(focus_orig=m["orig"])
 
     def drop_event(event):
-        nonlocal drop
         if drop["edit"] is not None:
             if event.type == pygame.TEXTINPUT:
                 drop["edit"]["text"] = (drop["edit"]["text"] + event.text)[:40]
@@ -1687,8 +1705,11 @@ def run_ui(state, stop_flag, dev_line, err_line="", monitor=None, board=None,
                 stop_flag.set()
 
             elif event.type == pygame.VIDEORESIZE:
-                screen = pygame.display.set_mode((event.w, event.h),
-                                                 pygame.RESIZABLE)
+                # clamp to the design's base size: below it the cards and
+                # the soundboard would only clip, so refuse the shrink
+                screen = pygame.display.set_mode(
+                    (max(event.w, WINDOW_SIZE[0]), max(event.h, WINDOW_SIZE[1])),
+                    pygame.RESIZABLE)
                 relayout()
 
             elif event.type == pygame.DROPFILE:
@@ -1915,6 +1936,13 @@ def run_ui(state, stop_flag, dev_line, err_line="", monitor=None, board=None,
             rebuild_grid()
         if layout_dirty[0]:
             build_layout()
+
+        if not shot_path and not pygame.display.get_active():
+            # minimized (the normal state while gaming): nobody can see a
+            # frame, and every one drawn holds the GIL against the audio
+            # callback. Keep pumping events - restore, quit - and idle.
+            clock.tick(10)
+            continue
 
         # ------------------------------------------------------------- draw
         mouse_pos = pygame.mouse.get_pos()
@@ -2151,7 +2179,7 @@ def run_ui(state, stop_flag, dev_line, err_line="", monitor=None, board=None,
                                  border_radius=8)
                 # header (a focus stop; click/enter collapses)
                 hr = pygame.Rect(r.x, r.y, r.w, CARD_HDR)
-                hdr_hit[c["key"]] = hr
+                hdr_hit[c["key"]] = hr.clip(cards_area)
                 hdr_focused = st == ("hdr", c["key"])
                 hm = q8(hover_step(("hdr", c["key"]),
                                    hr.collidepoint(mouse_pos), dt))
@@ -2211,7 +2239,7 @@ def run_ui(state, stop_flag, dev_line, err_line="", monitor=None, board=None,
                 for i in c["rows"]:
                     it = menu.items[i]
                     rr = pygame.Rect(r.x + PAD_X, ry_, r.w - 2 * PAD_X, ROW_HGT)
-                    row_hit[i] = rr
+                    row_hit[i] = rr.clip(cards_area)
                     focused = st == ("row", i)
                     fl = menu.flash.get(i, 0) - now
                     if focused:
@@ -2256,10 +2284,11 @@ def run_ui(state, stop_flag, dev_line, err_line="", monitor=None, board=None,
                                          rr.y + (ROW_HGT - vs.get_height()) // 2))
                     ry_ += ROW_HGT + ROW_GAP
                 if dim:
-                    ov = pygame.Surface((r.w - 2, r.h - CARD_HDR - 1),
-                                        pygame.SRCALPHA)
-                    ov.fill((*CLR["cardBg"], 158))     # body at ~38% (design 03)
-                    screen.blit(ov, (r.x + 1, r.y + CARD_HDR))
+                    # body at ~38% (design 03); grad() caches the surface -
+                    # this used to allocate a card-sized one every frame
+                    veil = (*CLR["cardBg"], 158)
+                    screen.blit(grad(r.w - 2, r.h - CARD_HDR - 1, veil, veil),
+                                (r.x + 1, r.y + CARD_HDR))
         screen.set_clip(None)
         if cards_content_h > cards_area.height:
             track = pygame.Rect(SB_X - COL_GAP + 3, CARD_TOP + 4, 3,

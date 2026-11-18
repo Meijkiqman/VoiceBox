@@ -1,10 +1,12 @@
 """Scenes: named snapshots of the whole setup (effects + AI + TTS), so a
 persona is one press instead of a row-by-row re-dial."""
-import json
-import time
 from pathlib import Path
 
 from .config import SCENES_PATH
+from .log import get_logger
+from .persist import load_json, write_json_atomic
+
+_log = get_logger("scenes")
 
 # The effect dialing a scene restores, with the ranges that clamp a
 # hand-edited scenes.json (same shape as state.PERSIST_FIELDS).
@@ -23,10 +25,7 @@ FX_FIELDS = {
 def load_scenes(path=SCENES_PATH):
     """scenes.json -> [(name, params)]; bad entries are dropped so a
     hand-edited file can't break startup."""
-    try:
-        data = json.loads(Path(path).read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
-        return []
+    data = load_json(path, [])
     out = []
     if isinstance(data, list):
         for entry in data:
@@ -37,12 +36,11 @@ def load_scenes(path=SCENES_PATH):
 
 
 def save_scenes(scenes, path=SCENES_PATH):
-    from .state import write_json_atomic       # local: avoid an import cycle
     try:
         write_json_atomic(path,
                           [{"name": n, "params": p} for n, p in scenes])
-    except OSError:
-        pass                                   # read-only install dir: run on
+    except OSError as e:
+        _log.warning("scenes save failed: %s", e)   # read-only dir: run on
 
 
 class Scenes:
@@ -65,8 +63,7 @@ class Scenes:
         return [n for n, _ in self.scenes]
 
     def _report(self, msg):
-        self.state.status_msg = msg
-        self.state.status_at = time.time()
+        self.state.report(msg)
 
     def snapshot(self):
         """Current setup -> a scene params dict."""
@@ -172,7 +169,8 @@ class Scenes:
         pitch = p.get("ai_pitch")      # the scene's own pitch wins over it
         if isinstance(pitch, (int, float)) and not isinstance(pitch, bool):
             with s.lock:
-                s.ai_pitch = float(max(-24, min(24, int(pitch))))
+                # clamp before int(): int(nan/inf) raises
+                s.ai_pitch = float(int(max(-24, min(24, pitch))))
             ai.set_pitch(int(s.ai_pitch))
         if "ai_fx" in p:
             fx = bool(p["ai_fx"])

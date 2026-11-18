@@ -2,6 +2,7 @@
 saved-phrase bank."""
 import hashlib
 import json
+import os
 import queue
 import subprocess
 import sys
@@ -15,6 +16,10 @@ from scipy.signal import resample_poly
 
 from .config import (PIPER_DIR, SAMPLERATE, TTS_CACHE_DIR, TTS_MAX_CHARS,
                      TTS_PHRASES_PATH)
+from .log import get_logger
+from .persist import load_json, write_json_atomic
+
+_log = get_logger("tts")
 
 # ---------------------------------------------------------------- Piper
 # Optional neural voices: a piper/ folder (engine + voices/*.onnx) makes
@@ -74,7 +79,7 @@ class _PiperProc:
                 if line.strip():
                     self.lines.put(line.strip())
         except Exception:
-            pass
+            _log.debug("piper stdout reader ended", exc_info=True)
         self.lines.put(None)           # EOF: the process is gone
 
     def alive(self):
@@ -94,7 +99,10 @@ class _PiperProc:
                 left = deadline - time.time()
                 if left <= 0:
                     raise RuntimeError("piper timed out")
-                line = self.lines.get(timeout=left)
+                try:
+                    line = self.lines.get(timeout=left)
+                except queue.Empty:
+                    raise RuntimeError("piper timed out") from None
                 if line is None:
                     raise RuntimeError("piper died")
                 # only OUR echoed wav path is the completion signal - a
@@ -340,6 +348,7 @@ def _list_os_voices():
         return [ln.split()[3] for ln in r.stdout.splitlines()[1:]
                 if len(ln.split()) >= 4]
     except Exception:
+        _log.warning("listing OS voices failed", exc_info=True)
         return []
 
 
@@ -349,6 +358,13 @@ def prune_tts_cache(max_mb=300):
     and spoken caption also writes a wav here - fresh text that never hits
     the cache again - so without a cap the folder grows forever."""
     try:
+        # renders orphaned by a crash/kill mid-synthesis (see tts_synthesize)
+        for p in TTS_CACHE_DIR.glob("*.part.wav"):
+            try:
+                if time.time() - p.stat().st_mtime > 600:
+                    p.unlink()
+            except OSError:
+                pass
         wavs = sorted(TTS_CACHE_DIR.glob("*.wav"),
                       key=lambda p: p.stat().st_mtime)
         total = sum(p.stat().st_size for p in wavs)
@@ -360,7 +376,7 @@ def prune_tts_cache(max_mb=300):
             except OSError:
                 pass                   # in use / already gone: skip it
     except OSError:
-        pass
+        _log.debug("tts cache prune skipped", exc_info=True)
 
 
 def tts_cache_path(text, voice=None, rate=0):
@@ -371,6 +387,13 @@ def tts_cache_path(text, voice=None, rate=0):
                             + ".wav")
 
 
+def _unlink_quiet(path):
+    try:
+        Path(path).unlink(missing_ok=True)
+    except OSError:                    # still open elsewhere (Windows): the
+        pass                           # startup prune collects it later
+
+
 def tts_synthesize(text, voice=None, rate=0):
     """text -> (mono float32 samples at SAMPLERATE, cached wav path).
     Synthesized once per (voice, rate, text), then served from tts_cache/
@@ -379,24 +402,54 @@ def tts_synthesize(text, voice=None, rate=0):
     wav = tts_cache_path(text, voice, rate)
     for retry in (False, True):
         if retry or not wav.is_file():
+            # Render under a private name and publish with an atomic rename:
+            # the phrase bank, the translator and the listener all render
+            # from their own threads, and a second one finding the engine's
+            # half-written wav at the final path would read garbage - or, on
+            # Windows, fail trying to delete a file the engine still holds.
+            part = wav.with_name(f"{wav.stem}.{os.getpid()}-"
+                                 f"{threading.get_ident()}.part.wav")
             try:
-                synth_tts_wav(text, wav, voice, rate)
+                synth_tts_wav(text, part, voice, rate)
+                os.replace(part, wav)
             except BaseException:              # incl. timeout: no half-written wavs
-                wav.unlink(missing_ok=True)
+                _unlink_quiet(part)
                 raise
         try:
             data, sr = sf.read(str(wav), dtype="float32", always_2d=True)
             break
         except Exception:
-            # a truncated cache file (piper killed mid-write) must not be
-            # served - or fail - forever: drop it and render once more
-            wav.unlink(missing_ok=True)
+            # a truncated cache file (an older build killed mid-write) must
+            # not be served - or fail - forever: drop it and render once more
+            _unlink_quiet(wav)
             if retry:
                 raise
     data = data.mean(axis=1)
     if sr != SAMPLERATE:
         data = resample_poly(data, SAMPLERATE, sr).astype(np.float32)
     return data, wav
+
+
+def route_speech(state, player, monitor, ai, samples, wav, kind):
+    """Send rendered speech where it belongs - the one routing contract for
+    TTS phrases and spoken translations. With TTS voice FX on and the AI
+    worker live, the wav is injected into the worker (it comes out in the
+    AI voice); otherwise the samples join the mic channel, fx-tagged so the
+    chain shapes them. `kind` ("tts" | "trans") picks the volume slider the
+    entry follows. The raw render also plays on the local speakers - unless
+    self-listen already mirrors it (including via the AI path: worker
+    mirror, or the chain mirror with AI voice FX on), which would be heard
+    as two voices at once. Returns True when the AI worker took it."""
+    fx = state.tts_fx
+    through_ai = False
+    if fx and wav is not None and ai is not None and ai.proc is not None:
+        through_ai = ai.inject(wav)
+    if not through_ai:
+        state.events.put((kind, samples, fx))
+    mirrored = monitor is not None and monitor.on
+    if player is not None and not mirrored:
+        player.play_raw(samples)
+    return through_ai
 
 
 class TTSBank:
@@ -432,24 +485,36 @@ class TTSBank:
         self._synth_sem = threading.Semaphore(2)
 
     def _load(self):
-        try:
-            data = json.loads(self.path.read_text(encoding="utf-8"))
-            return [str(p)[:TTS_MAX_CHARS] for p in data
-                    if isinstance(p, str) and p.strip()]
-        except (OSError, json.JSONDecodeError, TypeError):
+        data = load_json(self.path)
+        if data is None:
+            if self.path.is_file():
+                # present but unreadable/corrupt: move it aside, so the
+                # next add() can't bury the only copy under an empty list
+                bad = self.path.with_name(self.path.name + ".broken")
+                try:
+                    os.replace(self.path, bad)
+                    _log.warning("phrase bank unreadable - kept as %s", bad)
+                    self._report(f"TTS: phrases file unreadable - kept as "
+                                 f"{bad.name}")
+                except OSError:
+                    _log.warning("phrase bank unreadable and could not be "
+                                "moved aside", exc_info=True)
             return []
+        if not isinstance(data, list):
+            return []
+        return [str(p)[:TTS_MAX_CHARS] for p in data
+                if isinstance(p, str) and p.strip()]
 
     def _save(self):
-        try:
-            self.path.write_text(
-                json.dumps(self.phrases, indent=2, ensure_ascii=False),
-                encoding="utf-8")
+        try:                           # temp + rename: a crash mid-write
+            write_json_atomic(self.path, self.phrases,   # can't truncate it
+                              ensure_ascii=False)
         except OSError as e:
+            _log.warning("phrase bank save failed: %s", e)
             self._report(f"TTS: can't save phrases: {e}")
 
     def _report(self, msg):
-        self.state.status_msg = msg
-        self.state.status_at = time.time()
+        self.state.report(msg)
 
     def warm(self):
         """Kick background synthesis for every phrase (startup pre-warm)."""
@@ -491,6 +556,7 @@ class TTSBank:
             with self._synth_sem:      # cap concurrent engine processes
                 samples, wav = tts_synthesize(text, voice, rate)
         except Exception as e:
+            _log.warning("synthesis failed for %r: %s", text[:40], e)
             if gen != self._gen:       # settings moved on mid-render: a fresh
                 return                 # job owns this phrase now, stay out
             self.status[text] = "error"
@@ -508,11 +574,25 @@ class TTSBank:
             self.samples[text] = samples
             self.wav_path[text] = wav
             self.status[text] = "ready"
+            self._trim_unsaved(keep=text)
             play_now = self.pending == text
             if play_now:
                 self.pending = None
         if play_now:
             self._route(text)
+
+    def _trim_unsaved(self, keep=None, limit=8):
+        """Quick-speak (Shift+Enter) texts and deleted phrases stay rendered
+        in RAM so a repeat is instant - but each is megabytes of float32, and
+        a long session of one-off lines would hold all of them forever. Keep
+        only the newest few (the disk cache still makes a replay cheap).
+        Caller holds _gen_lock."""
+        saved = set(self.phrases)
+        loose = [t for t in self.samples if t not in saved and t != keep]
+        for t in loose[:max(0, len(loose) - (limit - 1))]:
+            self.samples.pop(t, None)
+            self.wav_path.pop(t, None)
+            self.status.pop(t, None)
 
     def add(self, text):
         """Save a phrase (whitespace collapsed). True = accepted."""
@@ -570,21 +650,7 @@ class TTSBank:
             self.pending = text
             self.ensure(text)
             return
-        fx = self.state.tts_fx
-        through_ai = False
-        wav = self.wav_path.get(text)
-        if (fx and wav is not None and self.ai is not None
-                and self.ai.proc is not None):
-            through_ai = self.ai.inject(wav)
-        if not through_ai:
-            self.state.events.put(("tts", samples, fx))
-        # local listen, like the soundboard - skipped when self-listen already
-        # carries the phrase (it would be heard doubled). That includes the AI
-        # path: with HEAR on the converted phrase reaches the speakers too -
-        # via the worker's own mirror, or the chain mirror with AI voice FX on
-        # - so playing the raw render as well would overlap it in two voices.
-        mirrored = self.monitor is not None and self.monitor.on
-        if self.player is not None and not mirrored:
-            self.player.play_raw(samples)
+        route_speech(self.state, self.player, self.monitor, self.ai,
+                     samples, self.wav_path.get(text), "tts")
 
 

@@ -63,4 +63,31 @@ check("harvest skipped while muted", hq.qsize() == 0)
 state.mic_muted = False
 state.harvest_q = None
 
+
+# a crash inside the callback must not abort the stream: the block comes
+# out silent and the footer says why (sounddevice would otherwise return
+# paAbort and the cable would stay dead until a device re-open)
+class _Broken:
+    def process(self, x):
+        raise RuntimeError("boom")
+
+
+good_shifter, state.shifter = state.shifter, _Broken()
+state.status_msg = ""
+out = run_block(state)
+check("callback survives an exception (silent block)",
+      float(np.abs(out).max()) == 0.0)
+check("callback failure reported", state.status_msg.startswith("audio: boom"))
+state.shifter = good_shifter
+out = run_block(state)
+check("stream keeps running after the failure", float(np.abs(out).max()) > 0.2)
+
+# the running peak for the translator's VAD: set by the callback, reset by
+# its reader - so a short word can't fall between two 50 ms samples
+state.in_peak = 0.0
+run_block(state, level=0.4)
+run_block(state, level=0.1)
+check("in_level is the last block", abs(state.in_level - 0.1) < 1e-6)
+check("in_peak holds the max since reset", abs(state.in_peak - 0.4) < 1e-6)
+
 finish()

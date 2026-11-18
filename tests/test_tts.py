@@ -67,6 +67,22 @@ check("delete removes + persists",
       and json.loads(tmp.read_text(encoding="utf-8")) == ["two words"])
 bank.delete(5)                                       # out of range: no crash
 check("out-of-range delete ignored", bank.phrases == ["two words"])
+check("phrase file written atomically (no .tmp left behind)",
+      not tmp.with_suffix(".json.tmp").exists())
+
+# a corrupt phrases file must not be buried by the next save: it is moved
+# aside as .broken and the bank starts empty
+bad = Path(tempfile.mkdtemp()) / "phrases.json"
+bad.write_text('["hello", "wor', encoding="utf-8")    # truncated mid-write
+bank_bad = voicebox.TTSBank(state, path=bad)
+check("corrupt phrase file -> empty bank", bank_bad.phrases == [])
+check("corrupt phrase file kept as .broken",
+      bad.with_name("phrases.json.broken").is_file() and not bad.exists())
+bank_bad.add("fresh start")
+check("next save does not touch the .broken copy",
+      bad.with_name("phrases.json.broken").read_text(encoding="utf-8")
+      == '["hello", "wor'
+      and json.loads(bad.read_text(encoding="utf-8")) == ["fresh start"])
 
 # ---------------------------------------------------------- synth lifecycle
 check("add kicked background synth", wait_status(bank, "two words") == "ready")

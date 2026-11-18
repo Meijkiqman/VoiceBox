@@ -20,6 +20,11 @@ import soundfile as sf
 from .config import (HARVEST_CAP_MIN, HARVEST_DIRNAME, HARVEST_HANG_S,
                      HARVEST_MAX_S, HARVEST_MIN_S, HARVEST_PRE_S,
                      HARVEST_THRESH_DB, RVC_DIR, SAMPLERATE)
+from .log import get_logger
+from .segment import Segmenter
+
+_log = get_logger("harvester")
+
 
 class Harvester:
     def __init__(self, state, out_dir=None):
@@ -69,8 +74,7 @@ class Harvester:
         return f"off - {self.minutes:.1f} min" if self.seconds else "off"
 
     def _report(self, msg):
-        self.state.status_msg = msg
-        self.state.status_at = time.time()
+        self.state.report(msg)
 
     def toggle(self):
         self.stop() if self.on else self.start()
@@ -115,13 +119,8 @@ class Harvester:
             t.join(timeout=2.0)        # let a clip mid-write land intact
 
     def _worker(self, q, stop):
-        thresh = 10.0 ** (HARVEST_THRESH_DB / 20.0)
-        pre_max = int(HARVEST_PRE_S * SAMPLERATE)
-        hang_max = HARVEST_HANG_S
-        pre = []                       # rolling pre-roll blocks
-        pre_len = 0
-        seg = None                     # list of blocks while inside speech
-        quiet = 0.0                    # trailing silence inside a segment, s
+        seg = Segmenter(HARVEST_THRESH_DB, HARVEST_PRE_S, HARVEST_HANG_S,
+                        HARVEST_MAX_S)
         while not stop.is_set():
             try:
                 block = q.get(timeout=0.5)
@@ -129,33 +128,22 @@ class Harvester:
                 continue
             if block is None:          # stop(): flush what we were building
                 break
-            speaking = float(np.abs(block).max()) >= thresh
-            if seg is None:
-                if speaking:
-                    seg = pre + [block]
-                    quiet = 0.0
-                else:
-                    pre.append(block)
-                    pre_len += len(block)
-                    while pre_len - len(pre[0]) >= pre_max:
-                        pre_len -= len(pre[0])
-                        pre.pop(0)
+            clip = seg.feed(block)
+            if clip is None:
                 continue
-            seg.append(block)
-            quiet = 0.0 if speaking else quiet + len(block) / SAMPLERATE
-            seg_s = sum(len(b) for b in seg) / SAMPLERATE
-            if quiet >= hang_max or seg_s >= HARVEST_MAX_S:
-                self._finish(np.concatenate(seg))
-                pre, pre_len, seg = [], 0, None
-                if self.full:
-                    self.stop()
-                    with self.state.lock:
-                        self.state.harvest_on = False
-                    self._report(f"harvest: dataset full at "
-                                 f"{HARVEST_CAP_MIN:.0f} min - time to retrain")
-                    break
-        if seg is not None:
-            self._finish(np.concatenate(seg))
+            self._finish(clip)
+            if self.full:
+                if self._stop is not stop:
+                    break              # a newer session owns the toggle
+                self.stop()
+                with self.state.lock:
+                    self.state.harvest_on = False
+                self._report(f"harvest: dataset full at "
+                             f"{HARVEST_CAP_MIN:.0f} min - time to retrain")
+                break
+        clip = seg.flush()
+        if clip is not None:
+            self._finish(clip)
 
     def _finish(self, clip):
         """Quality gate + normalize + save. Rejections are silent (a counter,
@@ -171,6 +159,7 @@ class Harvester:
         try:
             sf.write(str(self.dir / name), clip, SAMPLERATE, subtype="PCM_16")
         except Exception as e:
+            _log.warning("clip save failed: %s", e)
             self.error = str(e)
             self._report(f"harvest: {e}")
             return

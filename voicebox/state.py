@@ -1,14 +1,17 @@
 """Shared runtime state and its persistence (settings.json, user presets)."""
-import json
-import os
 import queue
 import threading
-from pathlib import Path
+import time
 
 from . import soundboard     # module attr: tests swap soundboard.load_clips
-from .config import (PRESETS, SAMPLERATE, SETTINGS_PATH, USER_PRESETS_PATH)
+from .config import (PRESETS, SAMPLERATE, SETTINGS_PATH, TRANS_TARGETS,
+                     USER_PRESETS_PATH)
 from .dsp import (BassBoost, Doubler, Echo, NoiseGate, Radio, Reverb,
                   StreamingPitchShifter)
+from .log import get_logger
+from .persist import load_json, write_json_atomic   # noqa: F401 (re-export)
+
+_log = get_logger("state")
 
 # What survives a restart (settings.json). Ranges clamp hand-edited files.
 PERSIST_FIELDS = {
@@ -47,48 +50,31 @@ PERSIST_FIELDS = {
     "trans_source":  str,      # translator: "auto" | "no" | "en" (None = auto)
     "trans_target":  str,      # translator: TRANS_TARGETS code (None = en)
     "trans_model":   str,      # faster-whisper size (None = config default)
-    "trans_voice_en": str,     # per-target TTS voice (None = auto-pick)
-    "trans_voice_es": str,
-    "trans_voice_zh": str,
-    "trans_voice_fa": str,
-    "trans_voice_pa": str,
     "listen_device": str,      # incoming-speech capture device (None = auto)
 }
+# per-target translator TTS voice (None = auto-pick): one field per
+# TRANS_TARGETS entry, derived so a new language can't be forgotten here
+for _code, _ in TRANS_TARGETS:
+    PERSIST_FIELDS[f"trans_voice_{_code}"] = str
 
 
 def load_settings(path=SETTINGS_PATH):
     """settings.json -> dict; missing/broken file -> {} (defaults win)."""
-    try:
-        data = json.loads(Path(path).read_text(encoding="utf-8"))
-        return data if isinstance(data, dict) else {}
-    except (OSError, json.JSONDecodeError):
-        return {}
-
-
-def write_json_atomic(path, obj):
-    """Write JSON via a temp file + rename: a crash or power cut mid-write
-    must never truncate the live file (a truncated settings.json makes
-    load_settings return {} and silently resets every setting)."""
-    path = Path(path)
-    tmp = path.with_suffix(path.suffix + ".tmp")
-    tmp.write_text(json.dumps(obj, indent=2), encoding="utf-8")
-    os.replace(tmp, path)
+    data = load_json(path, {})
+    return data if isinstance(data, dict) else {}
 
 
 def save_settings(data, path=SETTINGS_PATH):
     try:
         write_json_atomic(path, data)
-    except OSError:
-        pass                                   # read-only install dir: run on
+    except OSError as e:
+        _log.debug("settings save failed: %s", e)   # read-only dir: run on
 
 
 def load_user_presets(path=USER_PRESETS_PATH):
     """user_presets.json -> [(name, params)] in PRESETS shape; bad entries
     are dropped so a hand-edited file can't break startup."""
-    try:
-        data = json.loads(Path(path).read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
-        return []
+    data = load_json(path, [])
     out = []
     if isinstance(data, list):
         for entry in data:
@@ -102,8 +88,8 @@ def save_user_presets(presets, path=USER_PRESETS_PATH):
     try:
         write_json_atomic(path,
                           [{"name": n, "params": p} for n, p in presets])
-    except OSError:
-        pass
+    except OSError as e:
+        _log.warning("user presets save failed: %s", e)
 
 
 class State:
@@ -133,11 +119,8 @@ class State:
         self.trans_source = None      # translator input lang; None = auto
         self.trans_target = None      # translator output lang; None = en
         self.trans_model = None       # whisper size; None = config default
-        self.trans_voice_en = None    # per-target TTS voice; None = auto-pick
-        self.trans_voice_es = None
-        self.trans_voice_zh = None
-        self.trans_voice_fa = None
-        self.trans_voice_pa = None
+        for code, _ in TRANS_TARGETS: # per-target TTS voice; None = auto-pick
+            setattr(self, f"trans_voice_{code}", None)
         self.trans_hold = False       # capturing: outgoing voice path silent
         self.trans_tap = None         # Queue while capturing (raw mic blocks)
         self.trans_auto = False       # continuous translate (TRANS strip chip)
@@ -177,9 +160,17 @@ class State:
         self.status_at = 0.0          # when status_msg was last set
         self.status_count = 0         # how many times a status fired (underrun tally)
         self.in_level = 0.0           # audio thread -> UI mic meter (block peak)
+        self.in_peak = 0.0            # running max of in_level; the translator's
+                                      # VAD reads and resets it every tick
         self.monitor_q = None         # set to a Queue while self-listen is on
         self.record_q = None          # set to a Queue while recording
         self.cards_collapsed = set()  # dashboard cards folded to their header
+
+    def report(self, msg):
+        """Put a line in the footer status chip (any thread; the UI fades
+        it after a few seconds)."""
+        self.status_msg = msg
+        self.status_at = time.time()
 
     def set_pitch(self, semis):
         # The shifter is owned by the audio thread; hand the change over via the
@@ -220,14 +211,17 @@ class State:
         """Preset name while values still match it, else "Custom"."""
         presets = self.presets_all()
         name, p = presets[self.preset_idx % len(presets)]
-        matches = (self.semitones == p.get("semitones", 0)
-                   and self.robot == float(p.get("robot", 0.0))
-                   and self.drive == p.get("drive", 0.0)
-                   and self.reverb == p.get("reverb", 0.0)
-                   and self.echo == p.get("echo", 0.0)
-                   and self.doubler == p.get("doubler", 0.0)
-                   and self.bass == p.get("bass", 0.0)
-                   and self.radio == p.get("radio", False))
+
+        def same(a, b):                # values that went through a slider or
+            return abs(float(a) - float(b)) < 1e-6   # JSON: tolerance, not ==
+        matches = (same(self.semitones, p.get("semitones", 0))
+                   and same(self.robot, p.get("robot", 0.0))
+                   and same(self.drive, p.get("drive", 0.0))
+                   and same(self.reverb, p.get("reverb", 0.0))
+                   and same(self.echo, p.get("echo", 0.0))
+                   and same(self.doubler, p.get("doubler", 0.0))
+                   and same(self.bass, p.get("bass", 0.0))
+                   and bool(self.radio) == bool(p.get("radio", False)))
         return name if matches else "Custom"
 
     def save_user_preset(self):

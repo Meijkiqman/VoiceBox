@@ -403,5 +403,16 @@ other.restore(snap)
 check("persist source", other.trans_source == "no")
 check("persist target", other.trans_target == "zh")
 check("persist voice", other.trans_voice_zh == VOICES[2])
+# every TRANS_TARGETS code has a persisted voice field, not just the
+# original five (de/fr/it/pt/tr/ar used to be silent dynamic attributes)
+from voicebox.config import TRANS_TARGETS
+with state.lock:
+    state.trans_voice_de = VOICES[1]
+other2 = State()
+other2.restore(state.snapshot())
+check("persist voice for a later-added target",
+      other2.trans_voice_de == VOICES[1])
+check("all targets declared on State",
+      all(hasattr(State(), f"trans_voice_{c}") for c, _ in TRANS_TARGETS))
 
 finish()

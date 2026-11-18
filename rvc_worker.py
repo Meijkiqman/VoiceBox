@@ -184,7 +184,12 @@ if __name__ == "__main__":
             while True:
                 sock.sendall(fx_q.get().tobytes())
         except Exception:
-            fx["sock"] = None            # bridge died: fall back to the device
+            if fx["sock"] is sock:       # bridge died: fall back to the
+                fx["sock"] = None        # device (unless already replaced)
+            try:
+                sock.close()
+            except Exception:
+                pass
 
     def _fx_connect():
         if not args.fx_port:

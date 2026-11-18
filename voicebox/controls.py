@@ -2,15 +2,20 @@
 import json
 import queue
 import threading
-import time
 
 from .config import CONTROLS_PATH, DEFAULT_CONTROLS
+from .log import get_logger
+
+_log = get_logger("controls")
+
 
 def load_controls():
     """controls.json merged over defaults; broken/missing file -> defaults."""
     cfg = json.loads(json.dumps(DEFAULT_CONTROLS))     # deep copy
     try:
         user = json.loads(CONTROLS_PATH.read_text(encoding="utf-8"))
+        if not isinstance(user, dict):     # e.g. a bare list: defaults win
+            return cfg
         for section in ("keyboard", "gamepad", "global"):
             if isinstance(user.get(section), dict):
                 for key, v in user[section].items():
@@ -20,7 +25,7 @@ def load_controls():
                             and not isinstance(v, list)):
                         v = [v]
                     cfg[section][key] = v
-    except (OSError, json.JSONDecodeError, TypeError):
+    except (OSError, ValueError, TypeError):   # ValueError: bad JSON/encoding
         pass
     return cfg
 
@@ -60,8 +65,8 @@ class GlobalHotkeys:
             fn = self._slow.get()
             try:
                 fn()
-            except Exception:
-                pass                   # a binding crash must not kill hotkeys
+            except Exception:          # a binding crash must not kill hotkeys
+                _log.exception("hotkey binding crashed")
 
     def _defer(self, fn):
         return lambda: self._slow.put(fn)
@@ -113,6 +118,7 @@ class GlobalHotkeys:
         try:
             import keyboard                # deferred: import can itself fail
         except Exception as e:
+            _log.warning("keyboard package unavailable: %s", e)
             self.error = f"global hotkeys off: {e}"
             return
         handles, hooks = [], []
@@ -137,6 +143,7 @@ class GlobalHotkeys:
                     keyboard.unhook(h)
                 except Exception:
                     pass
+            _log.warning("hotkey registration failed: %s", e)
             self.error = f"global hotkeys off: {e}"
             return
         self._kb = keyboard
@@ -162,8 +169,7 @@ class GlobalHotkeys:
     def toggle(self):
         self.disable() if self.on else self.enable()
         if self.error:                     # surface why it would not start
-            self.state.status_msg = self.error
-            self.state.status_at = time.time()
+            self.state.report(self.error)
 
     def close(self):
         self.disable()

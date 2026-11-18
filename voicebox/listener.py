@@ -24,7 +24,12 @@ from .config import (BLOCKSIZE, CHANNELS, LISTEN_CAPTION_N, LISTEN_CAPTION_S,
                      LISTEN_DEVICE_HINTS, LISTEN_HANG_S, LISTEN_MAX_S,
                      LISTEN_MIN_S, LISTEN_PRE_S, LISTEN_TARGET,
                      LISTEN_THRESH_DB, SAMPLERATE)
+from .log import get_logger
+from .segment import Segmenter
 from .tts import tts_synthesize
+from .util import cycle_index, ellipsize
+
+_log = get_logger("listener")
 
 class Listener:
     """Owns the capture stream and its segmentation/translation threads.
@@ -45,6 +50,8 @@ class Listener:
         self._jobs = None              # utterances -> translation worker
         self._stop = None
         self.device_name = ""          # resolved name, for the row
+        self._auto_at = 0.0            # _auto_device() cache (see there)
+        self._auto_name = None
 
     # ---- device selection ----
 
@@ -53,22 +60,23 @@ class Listener:
             return [d["name"] for d in sd.query_devices()
                     if d["max_input_channels"] > 0]
         except Exception:
+            _log.debug("device query failed", exc_info=True)
             return []
 
-    def _auto_device(self, _cache=[0.0, None]):
+    def _auto_device(self):
         """A second-cable output side, if one is installed. Never the primary
         "CABLE Output" - that would capture the user's own converted voice.
         Cached a few seconds: the Listen-device row calls this every frame,
         and sd.query_devices() enumerating every host API 30x/s is real CPU
         on a machine that is also running real-time audio."""
         now = time.time()
-        if now - _cache[0] > 5.0:
-            _cache[0] = now
-            _cache[1] = next(
+        if now - self._auto_at > 5.0:
+            self._auto_at = now
+            self._auto_name = next(
                 (name for name in self._input_names()
                  if any(h in name.lower() for h in LISTEN_DEVICE_HINTS)),
                 None)
-        return _cache[1]
+        return self._auto_name
 
     def device_options(self):
         return [None] + self._input_names()
@@ -77,13 +85,8 @@ class Listener:
         opts = self.device_options()
         if len(opts) < 2:
             return
-        try:
-            i = opts.index(self.state.listen_device)
-        except ValueError:
-            i = 0
         with self.state.lock:
-            self.state.listen_device = opts[(i + (1 if d >= 0 else -1))
-                                            % len(opts)]
+            self.state.listen_device = cycle_index(opts, self.state.listen_device, d)
         if self.on:                    # live switch, same as the engine rows
             self.stop()
             self.start()
@@ -93,7 +96,7 @@ class Listener:
         if name is None:
             auto = self._auto_device()
             name = f"auto ({auto})" if auto else "auto (none found)"
-        return name if len(name) <= width else name[:width - 3] + "..."
+        return ellipsize(name, width)
 
     # ---- lifecycle ----
 
@@ -109,8 +112,7 @@ class Listener:
         return "off"
 
     def _report(self, msg):
-        self.state.status_msg = msg
-        self.state.status_at = time.time()
+        self.state.report(msg)
 
     def toggle(self):
         self.stop() if self.on else self.start()
@@ -220,6 +222,7 @@ class Listener:
             self.out_stream.start()
             self.pass_q = q
         except Exception as e:
+            _log.warning("passthrough stream failed: %s", e)
             self.out_stream = None
             self._report(f"incoming: passthrough failed: {e}")
 
@@ -243,9 +246,8 @@ class Listener:
     # ---- segmentation (same shape as the harvester's) ----
 
     def _segmenter(self, stop, q, jobs):
-        thresh = 10.0 ** (LISTEN_THRESH_DB / 20.0)
-        pre_max = int(LISTEN_PRE_S * SAMPLERATE)
-        pre, pre_len, seg, quiet = [], 0, None, 0.0
+        seg = Segmenter(LISTEN_THRESH_DB, LISTEN_PRE_S, LISTEN_HANG_S,
+                        LISTEN_MAX_S)
         while not stop.is_set():
             try:
                 block = q.get(timeout=0.5)
@@ -253,39 +255,23 @@ class Listener:
                 continue
             if block is None:
                 break
-            speaking = float(np.abs(block).max()) >= thresh
-            if seg is None:
-                if speaking:
-                    seg = pre + [block]
-                    quiet = 0.0
-                else:
-                    pre.append(block)
-                    pre_len += len(block)
-                    while pre_len - len(pre[0]) >= pre_max:
-                        pre_len -= len(pre[0])
-                        pre.pop(0)
+            utt = seg.feed(block)
+            if utt is None or len(utt) < LISTEN_MIN_S * SAMPLERATE:
                 continue
-            seg.append(block)
-            quiet = 0.0 if speaking else quiet + len(block) / SAMPLERATE
-            seg_s = sum(len(b) for b in seg) / SAMPLERATE
-            if quiet >= LISTEN_HANG_S or seg_s >= LISTEN_MAX_S:
-                utt = np.concatenate(seg)
-                pre, pre_len, seg, quiet = [], 0, None, 0.0
-                if len(utt) >= LISTEN_MIN_S * SAMPLERATE:
-                    try:
-                        jobs.put_nowait(utt)
-                    except queue.Full:
-                        # translation lagging: drop the OLDEST queued
-                        # utterance, not this fresh one - captions should
-                        # trail live chat, not replay minutes-old speech
-                        try:
-                            jobs.get_nowait()
-                        except queue.Empty:
-                            pass
-                        try:
-                            jobs.put_nowait(utt)
-                        except queue.Full:
-                            pass
+            try:
+                jobs.put_nowait(utt)
+            except queue.Full:
+                # translation lagging: drop the OLDEST queued utterance,
+                # not this fresh one - captions should trail live chat,
+                # not replay minutes-old speech
+                try:
+                    jobs.get_nowait()
+                except queue.Empty:
+                    pass
+                try:
+                    jobs.put_nowait(utt)
+                except queue.Full:
+                    pass
 
     # ---- translation worker ----
 
@@ -309,6 +295,7 @@ class Listener:
                         self.player.play_raw(samples)
                 self.error = ""
             except Exception as e:
+                _log.warning("incoming translation failed", exc_info=True)
                 self.error = str(e)[:80]
                 self._report(f"incoming: {self.error}")
             finally:
@@ -321,5 +308,4 @@ class Listener:
         # raises RuntimeError if it grows mid-iteration (the copy is atomic)
         lines = [f"[{lang}]  {text}" for t, lang, text in list(self.captions)
                  if now - t < LISTEN_CAPTION_S]
-        return [ln if len(ln) <= width else ln[:width - 3] + "..."
-                for ln in lines[-LISTEN_CAPTION_N:]]
+        return [ellipsize(ln, width) for ln in lines[-LISTEN_CAPTION_N:]]
