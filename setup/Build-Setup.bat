@@ -19,6 +19,10 @@ python -m PyInstaller --onefile --console --name VoiceBoxSetup ^
     --add-data "..\voicebox.py;app" ^
     --add-data "..\voicebox;app\voicebox" ^
     --add-data "..\rvc_worker.py;app" ^
+    --add-data "..\rvc_trainer.py;app" ^
+    --add-data "..\requirements-translator.txt;app" ^
+    --add-data "get_piper_voices.py;app\setup" ^
+    --add-data "Get-PiperVoices.bat;app\setup" ^
     --add-data "..\controls.json;app" ^
     --add-data "..\requirements.txt;app" ^
     --add-data "..\VoiceBox.bat;app" ^

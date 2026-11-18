@@ -12,7 +12,7 @@ if errorlevel 1 (
 python -c "import numpy, scipy, sounddevice, soundfile, pygame, keyboard" >nul 2>&1
 if errorlevel 1 (
     echo Installing required packages...
-    pip install numpy scipy sounddevice soundfile pygame keyboard
+    python -m pip install numpy scipy sounddevice soundfile pygame keyboard
 )
 
 python voicebox.py %*

@@ -1,6 +1,7 @@
 """AI voice (RVC): lifecycle of the rvc_worker.py background process."""
 import socket
 import subprocess
+import sys
 import threading
 from pathlib import Path
 
@@ -11,6 +12,27 @@ from .config import (BASE_DIR, INPUT_DEVICE_MATCH, OUTPUT_DEVICE_MATCH,
 from .log import get_logger
 
 _log = get_logger("aivoice")
+
+
+def _end_worker(proc):
+    """Stop a worker AND its children. RVC creates a multiprocessing
+    Manager at import - a child process of the worker - and on Windows
+    terminate() kills only the worker itself: the Manager child was left
+    running after every stop, character switch and exit, one more orphaned
+    python.exe each time. taskkill /T takes the tree down in one go."""
+    pid = getattr(proc, "pid", None)
+    if sys.platform == "win32" and isinstance(pid, int):
+        try:
+            subprocess.run(["taskkill", "/F", "/T", "/PID", str(pid)],
+                           capture_output=True, timeout=10,
+                           creationflags=getattr(subprocess,
+                                                 "CREATE_NO_WINDOW", 0))
+        except Exception:
+            _log.debug("taskkill failed", exc_info=True)
+    try:
+        proc.terminate()               # no-op when taskkill already got it
+    except Exception:
+        pass
 
 
 class _Lerp:
@@ -397,14 +419,18 @@ class AiVoice:
             with self.state.lock:
                 self.state.ai_mute = False
 
-    def stop(self):
+    def stop(self, wait=False):
+        """wait=True (shutdown) blocks until the worker's process tree is
+        gone - a daemon thread would be cut off by interpreter exit."""
         with self._lock:
             proc, self.proc = self.proc, None
             if proc is not None:
-                try:
-                    proc.terminate()
-                except Exception:
-                    pass
+                if isinstance(getattr(proc, "pid", None), int) and not wait:
+                    # taskkill is ~100 ms of process spawn: off the UI thread
+                    threading.Thread(target=_end_worker, args=(proc,),
+                                     daemon=True).start()
+                else:
+                    _end_worker(proc)
             self.status = "off"
             if self.feed is not None:
                 self.feed.clear()
@@ -413,7 +439,7 @@ class AiVoice:
 
     def close(self):
         """Shutdown: stop the worker and release the FX bridge socket."""
-        self.stop()
+        self.stop(wait=True)
         if self.feed is not None:
             self.feed.close()
 

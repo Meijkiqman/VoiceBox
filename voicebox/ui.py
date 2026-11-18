@@ -428,8 +428,7 @@ class Menu:
             # (unless FX routing is on - then the main mirror carries it)
             self.ai.set_monitor(self.monitor.on and not self.state.ai_fx)
         if self.monitor.error:         # surface failures in the status line
-            self.state.status_msg = f"test: {self.monitor.error}"
-            self.state.status_at = time.time()
+            self.state.report(f"test: {self.monitor.error}")
 
     def play_clip(self, i):
         self.board.play(i)
@@ -955,6 +954,7 @@ def run_ui(state, stop_flag, dev_line, err_line="", monitor=None, board=None,
     cap_cache = {"key": None, "surf": None}
     cap_hit = None
     last_t = time.time()
+    engine_polled = last_t
     ui_debug.update(row_hit=row_hit, hdr_hit=hdr_hit, strip_hit=strip_hit,
                     grid_hit=grid_hit, scene_hit=scene_hit,
                     tts_row_hit=tts_row_hit, tts_del_hit=tts_del_hit,
@@ -1440,8 +1440,7 @@ def run_ui(state, stop_flag, dev_line, err_line="", monitor=None, board=None,
                 with state.lock:
                     setattr(state, kindd + "_device", v)
                 if not engine.open():
-                    state.status_msg = engine.error
-                    state.status_at = time.time()
+                    state.report(engine.error)
             return (["default"] + [str(o) for o in opts[1:]], opts,
                     getattr(state, kindd + "_device"), apply)
         return None
@@ -1471,8 +1470,7 @@ def run_ui(state, stop_flag, dev_line, err_line="", monitor=None, board=None,
                         if i == ai.sel), 0)
         elif label == "Scene" and scenes is not None:
             if not scenes.scenes:
-                state.status_msg = "no scenes yet - dial a setup, then Save scene"
-                state.status_at = time.time()
+                state.report("no scenes yet - dial a setup, then Save scene")
                 return
             entries = sorted(((nm, i) for i, nm in enumerate(scenes.names())),
                              key=lambda e: e[0].lower())
@@ -1488,8 +1486,7 @@ def run_ui(state, stop_flag, dev_line, err_line="", monitor=None, board=None,
             kind = "list"
             cur = opts.index(current) if current in opts else 0
         elif label in DROP_ROWS:
-            state.status_msg = f"{label}: still listing options - try again"
-            state.status_at = time.time()
+            state.report(f"{label}: still listing options - try again")
             return
         else:
             return
@@ -1723,11 +1720,9 @@ def run_ui(state, stop_flag, dev_line, err_line="", monitor=None, board=None,
                             shutil.copy2(src, dest)
                         board.rescan()
                     except Exception as e:
-                        state.status_msg = f"drop: {e}"
-                        state.status_at = time.time()
+                        state.report(f"drop: {e}")
                 else:
-                    state.status_msg = "drop: only wav / flac / ogg / mp3"
-                    state.status_at = time.time()
+                    state.report("drop: only wav / flac / ogg / mp3")
 
             elif drop is not None and event.type in (
                     pygame.KEYDOWN, pygame.KEYUP, pygame.TEXTINPUT,
@@ -1936,6 +1931,11 @@ def run_ui(state, stop_flag, dev_line, err_line="", monitor=None, board=None,
             rebuild_grid()
         if layout_dirty[0]:
             build_layout()
+
+        if engine is not None and now - engine_polled >= 1.0:
+            engine_polled = now
+            if not engine.poll():      # stream died: say so, don't pretend
+                state.report(engine.error)
 
         if not shot_path and not pygame.display.get_active():
             # minimized (the normal state while gaming): nobody can see a

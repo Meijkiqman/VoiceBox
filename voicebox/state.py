@@ -58,6 +58,44 @@ for _code, _ in TRANS_TARGETS:
     PERSIST_FIELDS[f"trans_voice_{_code}"] = str
 
 
+# The effect dialing a preset or scene carries, with the ranges that clamp
+# a hand-edited user_presets.json / scenes.json (scenes.py shares this).
+FX_FIELDS = {
+    "semitones": (-12.0, 12.0),
+    "robot":     (0.0, 1.0),
+    "drive":     (0.0, 1.0),
+    "reverb":    (0.0, 1.0),
+    "echo":      (0.0, 1.0),
+    "doubler":   (0.0, 1.0),
+    "bass":      (0.0, 1.0),
+    "radio":     bool,
+}
+
+
+def clean_fx_params(params):
+    """A preset's params with every value coerced and clamped; anything that
+    is not a number (null, "loud", NaN) is dropped, i.e. reads as off. The
+    Preset row compares these values every frame - one bad entry in
+    user_presets.json used to raise there and take the whole window down."""
+    out = {}
+    for key, spec in FX_FIELDS.items():
+        if key not in params:
+            continue
+        v = params[key]
+        if spec is bool:
+            out[key] = bool(v)
+            continue
+        try:
+            v = float(v)
+        except (TypeError, ValueError):
+            continue
+        if v != v:                     # NaN
+            continue
+        lo, hi = spec
+        out[key] = max(lo, min(hi, v))
+    return out
+
+
 def load_settings(path=SETTINGS_PATH):
     """settings.json -> dict; missing/broken file -> {} (defaults win)."""
     data = load_json(path, {})
@@ -80,7 +118,8 @@ def load_user_presets(path=USER_PRESETS_PATH):
         for entry in data:
             if (isinstance(entry, dict) and isinstance(entry.get("name"), str)
                     and isinstance(entry.get("params"), dict)):
-                out.append((entry["name"][:40], entry["params"]))
+                out.append((entry["name"][:40],
+                            clean_fx_params(entry["params"])))
     return out
 
 
@@ -156,6 +195,8 @@ class State:
         self.voices = []              # list of [samples, cursor]; audio thread only
         self.tts_voices = []          # list of [samples, cursor, fx]; audio thread only
         self.events = queue.Queue()   # UI thread -> audio thread
+        self.cb_count = 0             # audio callback heartbeat (see
+                                      # AudioEngine.poll: a stalled stream)
         self.status_msg = ""          # audio thread -> UI (underruns etc.)
         self.status_at = 0.0          # when status_msg was last set
         self.status_count = 0         # how many times a status fired (underrun tally)

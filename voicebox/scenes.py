@@ -5,21 +5,10 @@ from pathlib import Path
 from .config import SCENES_PATH
 from .log import get_logger
 from .persist import load_json, write_json_atomic
+from .state import FX_FIELDS   # the effect dialing a scene restores
 
 _log = get_logger("scenes")
 
-# The effect dialing a scene restores, with the ranges that clamp a
-# hand-edited scenes.json (same shape as state.PERSIST_FIELDS).
-FX_FIELDS = {
-    "semitones": (-12.0, 12.0),
-    "robot":     (0.0, 1.0),
-    "drive":     (0.0, 1.0),
-    "reverb":    (0.0, 1.0),
-    "echo":      (0.0, 1.0),
-    "doubler":   (0.0, 1.0),
-    "bass":      (0.0, 1.0),
-    "radio":     bool,
-}
 
 
 def load_scenes(path=SCENES_PATH):

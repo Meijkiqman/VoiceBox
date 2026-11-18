@@ -25,6 +25,7 @@ def make_callback(state):
         # sounddevice aborts the whole stream when the callback raises -
         # the cable would go silent until the next device re-open. Keep the
         # stream alive: this block is silence, the footer says what broke.
+        state.cb_count += 1           # heartbeat for AudioEngine.poll
         try:
             _callback(indata, outdata, frames, time_info, status)
         except Exception as e:
@@ -246,6 +247,8 @@ class AudioEngine:
         self.in_name = "default mic"   # resolved names for the UI
         self.out_name = "default out"
         self.latency_ms = None         # reported stream latency, for the footer
+        self._beat = None              # (cb_count, stalled polls) once the
+                                       # stream's callback has been seen alive
 
     def _report(self, msg):
         self.state.report(msg)
@@ -311,6 +314,7 @@ class AudioEngine:
                 stream.close()         # a failed start must not leak the handle
                 raise
             self.stream = stream
+            self._beat = None
             try:                       # duplex streams report (input, output)
                 lat = stream.latency
                 self.latency_ms = 1000.0 * (sum(lat)
@@ -339,6 +343,40 @@ class AudioEngine:
             except Exception:
                 pass
             self.stream = None
+
+    def poll(self):
+        """Health check, called about once a second from the UI loop. A
+        device that is unplugged (or a driver that resets) leaves the stream
+        object in place but dead: nothing reaches the cable, and the window
+        kept showing a healthy device line. Two signals: PortAudio marking
+        the stream inactive, or - host APIs that never do - the callback
+        heartbeat standing still for 3 polls after it was seen running.
+        Returns False when the stream was found dead and closed."""
+        s = self.stream
+        if s is None:
+            return True
+        count = self.state.cb_count
+        dead = not getattr(s, "active", True)
+        if not dead:
+            if self._beat is None:
+                if count:              # arm only once the callback has run
+                    self._beat = (count, 0)
+            elif count != self._beat[0]:
+                self._beat = (count, 0)
+            else:
+                self._beat = (count, self._beat[1] + 1)
+                dead = self._beat[1] >= 3
+        if not dead:
+            return True
+        _log.warning("main stream stopped on its own (device removed?)")
+        self.close()
+        self._beat = None
+        self.dev_line = ""
+        self.latency_ms = None
+        self.state.in_level = 0.0
+        self.error = ("audio stream stopped (device removed?) - pick the "
+                      "Input/Output device again")
+        return False
 
     def options(self, kind):
         """[None, name, name, ...]: None is the "default" entry."""
@@ -500,7 +538,23 @@ class LocalPlayer:
 
     def _ensure_locked(self):
         if self.stream is not None:
-            return True
+            if getattr(self.stream, "active", True):
+                return True
+            # the speakers went away (headphones unplugged) and took the
+            # stream with them: without this, every later clip, cue and
+            # spoken phrase was queued into a dead stream, silently
+            _log.warning("speaker stream died - reopening")
+            try:
+                self.stream.close()
+            except Exception:
+                pass
+            self.stream = None
+            self.voices = []           # no callback is running: ours to clear
+            while not self.events.empty():
+                try:
+                    self.events.get_nowait()
+                except queue.Empty:
+                    break
         stream = None
         try:
             stream = sd.OutputStream(

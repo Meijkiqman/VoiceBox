@@ -209,10 +209,18 @@ if __name__ == "__main__":
         except Exception as e:
             print(f"STATUS error fx bridge {e}", flush=True)
 
+    quit_ev = threading.Event()
+
     def _stdin_listener():
+        try:
+            piped = not sys.stdin.isatty()
+        except Exception:
+            piped = False
         try:
             for line in sys.stdin:
                 line = line.strip()
+                if line == "QUIT":
+                    break
                 if line.startswith("MONITOR"):
                     set_monitor(line.split()[-1] in ("1", "on"))
                     continue
@@ -239,6 +247,11 @@ if __name__ == "__main__":
                     print(f"STATUS error tts {e}", flush=True)
         except Exception:
             pass
+        if piped:
+            # QUIT, or the pipe closed because VoiceBox exited/crashed: stop
+            # instead of feeding the cable (and holding the GPU) forever. A
+            # normal exit also lets the Manager child shut down with us.
+            quit_ev.set()
 
     def process(indata):
         """One stereo block in (block_frame, 2) -> converted mono block out.
@@ -341,8 +354,7 @@ if __name__ == "__main__":
         with sd.Stream(device=(in_dev, out_dev), channels=2, callback=callback,
                        blocksize=block_frame, samplerate=sr,
                        dtype="float32") as stream:
-            while True:
-                time.sleep(1)
+            while not quit_ev.wait(1):
                 if not stream.active:
                     # device unplugged / stream aborted: exit so VoiceBox's
                     # reader sees the death and unmutes its own voice path,

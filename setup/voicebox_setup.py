@@ -35,7 +35,10 @@ CABLE_URL = "https://download.vb-audio.com/Download_CABLE/VBCABLE_Driver_Pack45.
 PACKAGES = ["numpy", "scipy", "sounddevice", "soundfile", "pygame", "keyboard"]
 APP_FILES = ["voicebox.py", "rvc_worker.py", "rvc_trainer.py",
              "controls.json", "VoiceBox.bat", "requirements.txt",
-             "requirements-translator.txt"]
+             "requirements-translator.txt",
+             # the Piper voice installer the app's own messages point at
+             "setup/get_piper_voices.py", "setup/Get-PiperVoices.bat"]
+KEEP_IF_PRESENT = {"controls.json"}    # the user's remaps survive an update
 APP_DIRS = ["voicebox", "assets"]      # the app package + bundled fonts
 INSTALL_DIR = Path(os.environ.get("LOCALAPPDATA", str(Path.home()))) / "VoiceBox"
 
@@ -219,8 +222,12 @@ def step_app(url, skip):
     copied = 0
     for name in APP_FILES:
         f = src / name
+        dest = INSTALL_DIR / name
+        if name in KEEP_IF_PRESENT and dest.is_file():
+            continue
         if f.is_file():
-            shutil.copy2(f, INSTALL_DIR / name)
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(f, dest)
             copied += 1
     for name in APP_DIRS:
         d = src / name
